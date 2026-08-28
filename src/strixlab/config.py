@@ -1,0 +1,180 @@
+"""Pure YAML parsing and explicit trusted-value resolution."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any
+
+import yaml
+from yaml.constructor import ConstructorError
+from yaml.nodes import MappingNode
+from yaml.resolver import BaseResolver
+
+from strixlab.naming import ENV_NAME_RE
+
+
+class DuplicateKeyError(ConstructorError):
+    """Raised when YAML contains a duplicate mapping key."""
+
+
+class EnvironmentResolutionError(ValueError):
+    """Raised when trusted environment interpolation cannot be resolved."""
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate keys at every depth."""
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader,
+    node: MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise DuplicateKeyError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping)
+
+
+def parse_manifest_text(text: str) -> dict[str, Any]:
+    """Parse one manifest without performing resolution or other side effects."""
+
+    value = yaml.load(text, Loader=_UniqueKeyLoader)
+    if not isinstance(value, dict):
+        raise ValueError("manifest root must be a mapping")
+    if not all(isinstance(key, str) for key in value):
+        raise ValueError("manifest root keys must be strings")
+    return value
+
+
+def read_manifest(path: Path) -> dict[str, Any]:
+    """Read and parse a UTF-8 YAML manifest without resolving its values."""
+
+    return parse_manifest_text(path.read_text(encoding="utf-8"))
+
+
+def _read_escaped_token(
+    value: str,
+    index: int,
+    *,
+    unterminated: str,
+    invalid: Callable[[str], str],
+) -> tuple[str, int]:
+    """Parse one ``$${NAME}`` escape starting at ``index``.
+
+    ``index`` must point at the opening ``$${``. Returns the literal
+    ``${NAME}`` it expands to and the index just past the closing brace.
+    """
+
+    closing = value.find("}", index + 3)
+    if closing < 0:
+        raise EnvironmentResolutionError(unterminated)
+    name = value[index + 3 : closing]
+    if ENV_NAME_RE.fullmatch(name) is None:
+        raise EnvironmentResolutionError(invalid(name))
+    return "${" + name + "}", closing + 1
+
+
+def _resolve_string(value: str, environ: Mapping[str, str]) -> str:
+    if "$" not in value:
+        return value
+
+    output: list[str] = []
+    index = 0
+    while index < len(value):
+        if value.startswith("$${", index):
+            literal, index = _read_escaped_token(
+                value,
+                index,
+                unterminated="unterminated escaped environment token",
+                invalid=lambda name: f"invalid escaped environment token: {name!r}",
+            )
+            output.append(literal)
+            continue
+
+        if value.startswith("${", index):
+            closing = value.find("}", index + 2)
+            if closing < 0:
+                raise EnvironmentResolutionError("unterminated environment token")
+            name = value[index + 2 : closing]
+            if ENV_NAME_RE.fullmatch(name) is None:
+                raise EnvironmentResolutionError(f"invalid environment token: {name!r}")
+            if name not in environ:
+                raise EnvironmentResolutionError(f"environment variable is not set: {name}")
+            replacement = environ[name]
+            if not isinstance(replacement, str):
+                raise EnvironmentResolutionError(f"environment value is not a string: {name}")
+            output.append(_literal_environment_value(name, replacement))
+            index = closing + 1
+            continue
+
+        output.append(value[index])
+        index += 1
+    return "".join(output)
+
+
+def _literal_environment_value(name: str, value: str) -> str:
+    """Reject unresolved tokens introduced by an environment replacement."""
+
+    if "$" not in value:
+        return value
+
+    output: list[str] = []
+    index = 0
+    while index < len(value):
+        if value.startswith("$${", index):
+            literal, index = _read_escaped_token(
+                value,
+                index,
+                unterminated=f"unterminated escaped token in environment value: {name}",
+                invalid=lambda escaped: (
+                    f"invalid escaped token in environment value {name}: {escaped!r}"
+                ),
+            )
+            output.append(literal)
+            continue
+        if value.startswith("${", index):
+            raise EnvironmentResolutionError(
+                f"environment value introduces an unresolved token: {name}"
+            )
+        output.append(value[index])
+        index += 1
+    return "".join(output)
+
+
+def resolve_environment(value: Any, environ: Mapping[str, str]) -> Any:
+    """Resolve environment tokens in trusted values only.
+
+    Mapping keys are intentionally never transformed. Callers must opt in to
+    this function after parsing; imported candidate data should remain raw.
+    """
+
+    if isinstance(value, str):
+        return _resolve_string(value, environ)
+    if isinstance(value, list):
+        return [resolve_environment(item, environ) for item in value]
+    if isinstance(value, dict):
+        return {key: resolve_environment(item, environ) for key, item in value.items()}
+    return value

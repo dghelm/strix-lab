@@ -1,0 +1,81 @@
+[project]
+name = "strixlab"
+version = "0.1.0"
+description = "Evidence-first optimization research tooling for AMD Strix Halo"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+  "platformdirs>=4,<5",
+  "pydantic>=2.12,<3",
+  "pyyaml>=6,<7",
+  "rich>=14,<15",
+  "typer>=0.20,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/halo-box/strix-lab"
+Issues = "https://github.com/halo-box/strix-lab/issues"
+Repository = "https://github.com/halo-box/strix-lab"
+
+[project.scripts]
+strixlab = "strixlab.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.12,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "jsonschema>=4.26,<5",
+  "mypy>=1.18,<2",
+  "pytest>=9,<10",
+  "pytest-cov>=7,<8",
+  "ruff>=0.13,<1",
+  "types-pyyaml>=6,<7",
+]
+
+[tool.uv]
+required-version = ">=0.9.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "SIM", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["strixlab"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
+fail_under = 90
+show_missing = true
+skip_covered = true

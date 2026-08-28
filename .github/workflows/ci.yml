@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install locked project
+        run: uv sync --python "${{ matrix.python-version }}" --locked --all-groups
+
+      - name: Run tests
+        run: uv run --python "${{ matrix.python-version }}" pytest
+
+  quality:
+    name: Quality and package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install locked project
+        run: uv sync --python 3.12 --locked --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type-check
+        run: uv run mypy src
+
+      - name: Test with coverage
+        run: uv run pytest --cov=strixlab --cov-report=term-missing --cov-fail-under=90
+
+      - name: Verify generated schemas
+        run: uv run pytest tests/unit/test_schema_registry.py
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify wheel in isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_path="$(find "$GITHUB_WORKSPACE/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          test_root="$(mktemp -d)"
+
+          unzip -l "$wheel_path" | grep 'strixlab/schemas/v1/source-lock.schema.json'
+          unzip -l "$wheel_path" | grep 'strixlab/schemas/v1/machine.schema.json'
+          unzip -l "$wheel_path" | grep 'strixlab/schemas/v1/build.schema.json'
+          unzip -l "$wheel_path" | grep 'dist-info/licenses/LICENSE'
+          tar -tzf "$GITHUB_WORKSPACE/dist/strixlab-0.1.0.tar.gz" | grep '/LICENSE$'
+
+          cd "$test_root"
+          UV_NO_CONFIG=1 uv venv --python 3.12 "$test_root/.venv"
+          UV_NO_CONFIG=1 uv pip install --python "$test_root/.venv/bin/python" "$wheel_path"
+
+          test "$(UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" --version)" = "0.1.0"
+          UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" --help
+          UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" schema show source-lock >/dev/null
+          UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" schema show machine >/dev/null
+          UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" schema show build >/dev/null
+          printf '%s\n' \
+            'schema_version: 1' \
+            'id: smoke-source' \
+            'kind: git' \
+            'url: https://example.invalid/source.git' \
+            'commit: 0123456789abcdef0123456789abcdef01234567' \
+            'submodules: false' \
+            'adapter: llama_cpp' \
+            'allowed_dirty_state: false' \
+            >source.yaml
+          UV_NO_CONFIG=1 "$test_root/.venv/bin/strixlab" \
+            manifest validate source-lock source.yaml

@@ -1,0 +1,73 @@
+{
+  "$id": "urn:strixlab:schema:source-lock:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "adapter": {
+      "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Adapter",
+      "type": "string"
+    },
+    "allowed_dirty_state": {
+      "const": false,
+      "title": "Allowed Dirty State",
+      "type": "boolean"
+    },
+    "branch_hint": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Branch Hint"
+    },
+    "commit": {
+      "pattern": "^[0-9a-f]{40}(?![\\s\\S])",
+      "title": "Commit",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "const": "git",
+      "title": "Kind",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "submodules": {
+      "title": "Submodules",
+      "type": "boolean"
+    },
+    "url": {
+      "minLength": 1,
+      "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+      "title": "Url",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "url",
+    "commit",
+    "submodules",
+    "adapter",
+    "allowed_dirty_state"
+  ],
+  "title": "SourceLockV1",
+  "type": "object"
+}

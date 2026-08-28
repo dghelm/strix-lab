@@ -1,0 +1,141 @@
+{
+  "$defs": {
+    "ExclusiveLockV1": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+          "title": "Path",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "title": "ExclusiveLockV1",
+      "type": "object"
+    },
+    "MachineExpectationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "gpu_arch": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Gpu Arch",
+          "type": "string"
+        },
+        "integrated_gpu": {
+          "title": "Integrated Gpu",
+          "type": "boolean"
+        },
+        "memory_gib_min": {
+          "exclusiveMinimum": 0,
+          "title": "Memory Gib Min",
+          "type": "number"
+        }
+      },
+      "required": [
+        "gpu_arch",
+        "integrated_gpu",
+        "memory_gib_min"
+      ],
+      "title": "MachineExpectationV1",
+      "type": "object"
+    },
+    "MachineValidityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "max_background_gpu_busy_pct": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Max Background Gpu Busy Pct",
+          "type": "number"
+        },
+        "min_available_memory_gib": {
+          "minimum": 0,
+          "title": "Min Available Memory Gib",
+          "type": "number"
+        },
+        "require_ac_power": {
+          "title": "Require Ac Power",
+          "type": "boolean"
+        },
+        "temperature_warn_c": {
+          "title": "Temperature Warn C",
+          "type": "number"
+        }
+      },
+      "required": [
+        "require_ac_power",
+        "max_background_gpu_busy_pct",
+        "min_available_memory_gib",
+        "temperature_warn_c"
+      ],
+      "title": "MachineValidityV1",
+      "type": "object"
+    },
+    "TelemetryV1": {
+      "additionalProperties": false,
+      "properties": {
+        "amd_smi": {
+          "enum": [
+            "auto",
+            "required",
+            "disabled"
+          ],
+          "title": "Amd Smi",
+          "type": "string"
+        },
+        "sample_interval_ms": {
+          "exclusiveMinimum": 0,
+          "title": "Sample Interval Ms",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "amd_smi",
+        "sample_interval_ms"
+      ],
+      "title": "TelemetryV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:strixlab:schema:machine:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "exclusive_lock": {
+      "$ref": "#/$defs/ExclusiveLockV1"
+    },
+    "expect": {
+      "$ref": "#/$defs/MachineExpectationV1"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "telemetry": {
+      "$ref": "#/$defs/TelemetryV1"
+    },
+    "validity": {
+      "$ref": "#/$defs/MachineValidityV1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "expect",
+    "exclusive_lock",
+    "telemetry",
+    "validity"
+  ],
+  "title": "MachineProfileV1",
+  "type": "object"
+}

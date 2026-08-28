@@ -1,0 +1,114 @@
+{
+  "$defs": {
+    "CMakeScalar": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$id": "urn:strixlab:schema:build:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "build_type": {
+      "enum": [
+        "Release",
+        "RelWithDebInfo",
+        "Debug"
+      ],
+      "title": "Build Type",
+      "type": "string"
+    },
+    "cmake": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+          "$ref": "#/$defs/CMakeScalar"
+        }
+      },
+      "title": "Cmake",
+      "type": "object"
+    },
+    "environment": {
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
+          "pattern": "^[^\\u0000]*(?![\\s\\S])",
+          "type": "string"
+        }
+      },
+      "title": "Environment",
+      "type": "object"
+    },
+    "generator": {
+      "const": "Ninja",
+      "title": "Generator",
+      "type": "string"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "post_build_capture": {
+      "items": {
+        "enum": [
+          "cmake_cache",
+          "binary_hashes",
+          "ldd",
+          "elf_dynamic_section",
+          "compile_commands"
+        ],
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Post Build Capture",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "source": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Source",
+      "type": "string"
+    },
+    "targets": {
+      "items": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*(?![\\s\\S])",
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Targets",
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "source",
+    "generator",
+    "build_type",
+    "environment",
+    "cmake",
+    "targets",
+    "post_build_capture"
+  ],
+  "title": "BuildProfileV1",
+  "type": "object"
+}

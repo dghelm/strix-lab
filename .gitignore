@@ -1,1 +1,26 @@
 .references/
+
+# Local environments and tool state
+.venv/
+/.claude/codex-session-id
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage and packaging
+.coverage
+.coverage.*
+htmlcov/
+/build/
+/dist/
+
+# Native build byproducts
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+compile_commands.json
