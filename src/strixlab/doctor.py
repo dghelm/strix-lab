@@ -2,33 +2,30 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, suppress
+from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Any, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
-from strixlab.config import read_manifest
+from strixlab.config import iter_environment_references, read_manifest
 from strixlab.locks import LockAttempt, exclusive_lock
 from strixlab.machine import (
     PROFILER_TOOLS,
-    GPUIdentity,
-    HostFacts,
     MachineProbe,
     MachineSnapshot,
-    ProbeIssue,
-    TelemetrySample,
     ToolFact,
 )
-from strixlab.manifests import MachineProfileV1, resolve_and_validate_manifest
+from strixlab.manifests import DashId, MachineProfileV1, resolve_and_validate_manifest
 from strixlab.paths import resolve_home
+from strixlab.serialization import canonical_json_bytes
 
 CheckStatus = Literal["pass", "warning", "blocker", "skipped"]
 ReportStatus = Literal["ready", "blocked"]
@@ -36,7 +33,6 @@ SENSITIVE_NAME_RE = re.compile(
     r"(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION)",
     re.IGNORECASE,
 )
-INTERPOLATION_RE = re.compile(r"(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 ENVIRONMENT_ALLOWLIST = (
     "ROCM_PATH",
     "HIP_PATH",
@@ -117,7 +113,7 @@ class ProbeIssueV1(ReportModel):
 
 
 class CheckV1(ReportModel):
-    id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")]
+    id: DashId
     status: CheckStatus
     message: str
 
@@ -165,6 +161,41 @@ class ReportWriteError(RuntimeError):
 
 class SensitiveInterpolationError(ValueError):
     """Raised before resolution when a profile references a secret-like name."""
+
+
+@dataclass(frozen=True, slots=True)
+class RedactionContext:
+    """Precomputed secret values shared by every redaction and safety check.
+
+    The secret set is fixed for a run, so it is discovered once and reused for
+    designated free-text redaction, whole-payload verification, and terminal-
+    sink verification instead of rescanning the environment at each site.
+    """
+
+    secrets: tuple[str, ...] = field(repr=False)
+
+    @classmethod
+    def from_environ(cls, environ: Mapping[str, str]) -> RedactionContext:
+        return cls(_secret_values(environ))
+
+    def redact(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        for secret in self.secrets:
+            value = value.replace(secret, "[REDACTED]")
+        return value
+
+    def assert_payload_safe(self, payload: bytes) -> None:
+        """Fail closed if a serialized artifact still discloses a secret."""
+
+        for secret in self.secrets:
+            if secret.encode() in payload:
+                raise UnsafeDiagnosticError("diagnostic output failed secret-safety validation")
+
+    def assert_text_safe(self, value: str) -> None:
+        """Fail closed if a terminal line would disclose a sensitive value."""
+
+        self.assert_payload_safe(value.encode())
 
 
 class DoctorRun(BaseModel):
@@ -446,8 +477,7 @@ def capture_environment(environ: Mapping[str, str]) -> tuple[dict[str, str], Red
 
 def reject_sensitive_interpolations(value: Any) -> None:
     if isinstance(value, str):
-        names = INTERPOLATION_RE.findall(value)
-        if any(_is_sensitive_name(name) for name in names):
+        if any(_is_sensitive_name(name) for name in iter_environment_references(value)):
             raise SensitiveInterpolationError(
                 "machine profile may not interpolate a sensitive environment variable"
             )
@@ -469,92 +499,35 @@ def _secret_values(environ: Mapping[str, str]) -> tuple[str, ...]:
     )
 
 
-def _redact_text(value: str | None, secrets: tuple[str, ...]) -> str | None:
-    if value is None:
-        return None
-    for secret in secrets:
-        value = value.replace(secret, "[REDACTED]")
-    return value
+def _to_model[ModelT: ReportModel](model_cls: type[ModelT], value: Any) -> ModelT:
+    """Convert an observation dataclass to its report model by field reflection."""
+
+    return model_cls(**{item.name: getattr(value, item.name) for item in fields(value)})
 
 
-def _safe_snapshot(snapshot: MachineSnapshot, secrets: tuple[str, ...]) -> MachineSnapshot:
-    tools = tuple(
-        ToolFact(
-            name=value.name,
-            path=value.path,
-            version=_redact_text(value.version, secrets),
-            outcome=value.outcome,
-            truncated=value.truncated,
-        )
-        for value in snapshot.tools
-    )
-    samples = tuple(
-        TelemetrySample(
-            index=value.index,
-            source=value.source,
-            busy_pct=value.busy_pct,
-            temperature_c=value.temperature_c,
-            power_w=value.power_w,
-            sclk_hz=value.sclk_hz,
-            mclk_hz=value.mclk_hz,
-            error=_redact_text(value.error, secrets),
-        )
-        for value in snapshot.samples
-    )
-    issues = tuple(
-        ProbeIssue(value.code, _redact_text(value.message, secrets) or "probe failed")
-        for value in snapshot.issues
-    )
-    return MachineSnapshot(
-        host=snapshot.host,
-        tools=tools,
-        gpu=snapshot.gpu,
-        gpu_candidates=snapshot.gpu_candidates,
-        rocminfo_arches=snapshot.rocminfo_arches,
-        telemetry_source=snapshot.telemetry_source,
-        samples=samples,
-        issues=issues,
-        gpu_probes_skipped=snapshot.gpu_probes_skipped,
-    )
+def _safe_snapshot(snapshot: MachineSnapshot, context: RedactionContext) -> MachineSnapshot:
+    """Redact every designated free-text field before the snapshot is serialized.
 
+    Coverage spans all subprocess- and probe-derived free text: tool versions,
+    telemetry errors, probe messages, and the rocminfo-supplied GPU marketing
+    name. Enumerated values (identities, paths, clocks) are left intact; the
+    final whole-payload scan remains the fail-closed backstop.
+    """
 
-def _model_host(value: HostFacts) -> HostFactsV1:
-    return HostFactsV1(**{name: getattr(value, name) for name in HostFacts.__dataclass_fields__})
-
-
-def _model_tool(value: ToolFact) -> ToolFactV1:
-    return ToolFactV1(
-        name=value.name,
-        path=value.path,
-        version=value.version,
-        outcome=value.outcome,
-        truncated=value.truncated,
-    )
-
-
-def _model_gpu(value: GPUIdentity) -> GPUIdentityV1:
-    return GPUIdentityV1(
-        node=value.node,
-        arch=value.arch,
-        integrated=value.integrated,
-        render_node=value.render_node,
-        pci_bdf=value.pci_bdf,
-        vendor_id=value.vendor_id,
-        device_id=value.device_id,
-        marketing_name=value.marketing_name,
-    )
-
-
-def _model_sample(value: TelemetrySample) -> TelemetrySampleV1:
-    return TelemetrySampleV1(
-        index=value.index,
-        source=value.source,
-        busy_pct=value.busy_pct,
-        temperature_c=value.temperature_c,
-        power_w=value.power_w,
-        sclk_hz=value.sclk_hz,
-        mclk_hz=value.mclk_hz,
-        error=value.error,
+    gpu = snapshot.gpu
+    if gpu is not None and gpu.marketing_name is not None:
+        gpu = replace(gpu, marketing_name=context.redact(gpu.marketing_name))
+    return replace(
+        snapshot,
+        tools=tuple(replace(tool, version=context.redact(tool.version)) for tool in snapshot.tools),
+        samples=tuple(
+            replace(sample, error=context.redact(sample.error)) for sample in snapshot.samples
+        ),
+        issues=tuple(
+            replace(issue, message=context.redact(issue.message) or "probe failed")
+            for issue in snapshot.issues
+        ),
+        gpu=gpu,
     )
 
 
@@ -566,16 +539,33 @@ def build_report(
     started_at: datetime,
     ended_at: datetime,
 ) -> DoctorReportV1:
-    secrets = _secret_values(environ)
-    safe_snapshot = _safe_snapshot(snapshot, secrets)
-    checks = evaluate_machine(profile, safe_snapshot, lock)
+    """Build a report using redaction state derived from the supplied environment."""
+
+    return _build_report(
+        profile,
+        snapshot,
+        lock,
+        environ,
+        started_at,
+        ended_at,
+        context=RedactionContext.from_environ(environ),
+    )
+
+
+def _build_report(
+    profile: MachineProfileV1,
+    snapshot: MachineSnapshot,
+    lock: LockAttempt,
+    environ: Mapping[str, str],
+    started_at: datetime,
+    ended_at: datetime,
+    *,
+    context: RedactionContext,
+) -> DoctorReportV1:
+    safe_snapshot = _safe_snapshot(snapshot, context)
     checks = tuple(
-        CheckV1(
-            id=value.id,
-            status=value.status,
-            message=_redact_text(value.message, secrets) or "",
-        )
-        for value in checks
+        CheckV1(id=value.id, status=value.status, message=context.redact(value.message) or "")
+        for value in evaluate_machine(profile, safe_snapshot, lock)
     )
     environment, redaction = capture_environment(environ)
     return DoctorReportV1(
@@ -583,49 +573,29 @@ def build_report(
         ended_at=ended_at,
         machine=profile,
         status="blocked" if any(value.status == "blocker" for value in checks) else "ready",
-        host=_model_host(safe_snapshot.host),
-        tools=tuple(_model_tool(value) for value in safe_snapshot.tools),
-        gpu=_model_gpu(safe_snapshot.gpu) if safe_snapshot.gpu else None,
-        gpu_candidates=tuple(_model_gpu(value) for value in safe_snapshot.gpu_candidates),
+        host=_to_model(HostFactsV1, safe_snapshot.host),
+        tools=tuple(_to_model(ToolFactV1, value) for value in safe_snapshot.tools),
+        gpu=_to_model(GPUIdentityV1, safe_snapshot.gpu) if safe_snapshot.gpu else None,
+        gpu_candidates=tuple(
+            _to_model(GPUIdentityV1, value) for value in safe_snapshot.gpu_candidates
+        ),
         rocminfo_arches=safe_snapshot.rocminfo_arches,
         telemetry_source=safe_snapshot.telemetry_source,
-        samples=tuple(_model_sample(value) for value in safe_snapshot.samples),
+        samples=tuple(_to_model(TelemetrySampleV1, value) for value in safe_snapshot.samples),
         lock=LockFactV1(
             status=lock.status.value,
             path=str(lock.path),
-            reason=_redact_text(lock.reason, secrets),
+            reason=context.redact(lock.reason),
         ),
         checks=checks,
-        probe_errors=tuple(
-            ProbeIssueV1(code=value.code, message=value.message) for value in safe_snapshot.issues
-        ),
+        probe_errors=tuple(_to_model(ProbeIssueV1, value) for value in safe_snapshot.issues),
         environment=environment,
         redaction=redaction,
     )
 
 
 def canonical_report_bytes(report: DoctorReportV1) -> bytes:
-    return (
-        json.dumps(
-            report.model_dump(mode="json"),
-            sort_keys=True,
-            indent=2,
-            ensure_ascii=False,
-        )
-        + "\n"
-    ).encode()
-
-
-def _assert_secret_free(payload: bytes, environ: Mapping[str, str]) -> None:
-    for secret in _secret_values(environ):
-        if secret.encode() in payload:
-            raise UnsafeDiagnosticError("diagnostic output failed secret-safety validation")
-
-
-def assert_terminal_text_safe(value: str, environ: Mapping[str, str]) -> None:
-    """Fail closed if a terminal line would disclose a sensitive value."""
-
-    _assert_secret_free(value.encode(), environ)
+    return canonical_json_bytes(report.model_dump(mode="json"))
 
 
 def _prepare_parent(path: Path) -> None:
@@ -721,12 +691,6 @@ def publish_diagnostic(
             temporary.unlink(missing_ok=True)
 
 
-def _lock_context(
-    factory: Callable[[Path], AbstractContextManager[LockAttempt]], path: Path
-) -> AbstractContextManager[LockAttempt]:
-    return factory(path)
-
-
 def run_doctor(
     machine_path: Path,
     *,
@@ -740,6 +704,7 @@ def run_doctor(
     """Validate, observe, evaluate, and atomically publish one doctor report."""
 
     frozen_environ = dict(os.environ if environ is None else environ)
+    context = RedactionContext.from_environ(frozen_environ)
     raw = read_manifest(machine_path)
     reject_sensitive_interpolations(raw)
     model = resolve_and_validate_manifest("machine", raw, frozen_environ)
@@ -751,26 +716,26 @@ def run_doctor(
     started_at = now()
     snapshot = active_probe.collect_prelock()
     lock_path = Path(profile.exclusive_lock.path)
-    with _lock_context(lock_factory, lock_path) as lock:
+    with lock_factory(lock_path) as lock:
         if lock.acquired:
             snapshot = active_probe.collect_postlock(snapshot, profile)
         else:
             snapshot = active_probe.mark_gpu_skipped(
                 snapshot, "GPU-facing probes require exclusive lock ownership"
             )
-        report = build_report(profile, snapshot, lock, frozen_environ, started_at, now())
+        report = _build_report(
+            profile, snapshot, lock, frozen_environ, started_at, now(), context=context
+        )
         payload = canonical_report_bytes(report)
-        _assert_secret_free(payload, frozen_environ)
-        assert_terminal_text_safe(str(destination), frozen_environ)
+        context.assert_payload_safe(payload)
+        context.assert_text_safe(str(destination))
         actual = (
             publish_authoritative(destination, payload)
             if lock.acquired
             else publish_diagnostic(
                 destination,
                 payload,
-                path_validator=lambda candidate: assert_terminal_text_safe(
-                    str(candidate), frozen_environ
-                ),
+                path_validator=lambda candidate: context.assert_text_safe(str(candidate)),
             )
         )
     return DoctorRun(report=report, path=actual)

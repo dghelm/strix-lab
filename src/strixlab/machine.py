@@ -11,7 +11,7 @@ import shutil
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +36,6 @@ VERSION_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "git": ("--version",),
     "clang": ("--version",),
 }
-REQUIRED_TOOLS = frozenset({"hipcc", "rocminfo", "cmake", "ninja", "git"})
 PROFILER_TOOLS = ("rocprof", "rocprofv3", "rocprof-compute", "rocprof-sys")
 KNOWN_INTEGRATED_AMD_DEVICES = frozenset({0x1586})
 KNOWN_DISCRETE_AMD_DEVICES = frozenset(
@@ -116,7 +115,6 @@ class MachineSnapshot:
     telemetry_source: str | None = None
     samples: tuple[TelemetrySample, ...] = ()
     issues: tuple[ProbeIssue, ...] = ()
-    gpu_probes_skipped: bool = False
 
 
 @dataclass(slots=True)
@@ -138,11 +136,9 @@ class MachineProbe:
         return MachineSnapshot(host=host, tools=tools, issues=tuple(issues))
 
     def mark_gpu_skipped(self, snapshot: MachineSnapshot, reason: str) -> MachineSnapshot:
-        return MachineSnapshot(
-            host=snapshot.host,
-            tools=snapshot.tools,
+        return replace(
+            snapshot,
             issues=(*snapshot.issues, ProbeIssue("gpu-probes-skipped", reason)),
-            gpu_probes_skipped=True,
         )
 
     def collect_postlock(
@@ -162,16 +158,7 @@ class MachineProbe:
         if selected is not None:
             rocminfo_arches, marketing = self._rocminfo(selected, tools, issues)
             if marketing is not None:
-                selected = GPUIdentity(
-                    node=selected.node,
-                    arch=selected.arch,
-                    integrated=selected.integrated,
-                    render_node=selected.render_node,
-                    pci_bdf=selected.pci_bdf,
-                    vendor_id=selected.vendor_id,
-                    device_id=selected.device_id,
-                    marketing_name=marketing,
-                )
+                selected = replace(selected, marketing_name=marketing)
         samples: tuple[TelemetrySample, ...] = ()
         telemetry_source: str | None = None
         if selected is not None:

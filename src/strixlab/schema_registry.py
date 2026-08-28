@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 from strixlab.manifests import ManifestRegistry
+from strixlab.serialization import canonical_json_bytes
 
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -58,8 +58,7 @@ def generate_schema(kind: str, version: int = 1) -> dict[str, Any]:
 
 
 def canonical_schema_bytes(kind: str, version: int = 1) -> bytes:
-    value = generate_schema(kind, version)
-    return (json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
+    return canonical_json_bytes(generate_schema(kind, version))
 
 
 def schema_resource_bytes(kind: str, version: int = 1) -> bytes:

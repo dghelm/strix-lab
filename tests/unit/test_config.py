@@ -8,6 +8,7 @@ import yaml
 from strixlab.config import (
     DuplicateKeyError,
     EnvironmentResolutionError,
+    iter_environment_references,
     parse_manifest_text,
     read_manifest,
     resolve_environment,
@@ -103,3 +104,25 @@ def test_environment_replacement_cannot_introduce_an_unresolved_token() -> None:
 
 def test_environment_replacement_can_explicitly_escape_a_literal_token() -> None:
     assert resolve_environment("${FIRST}", {"FIRST": "$${SECOND}"}) == "${SECOND}"
+
+
+def test_iter_environment_references_shares_escape_and_naming_rules() -> None:
+    references = list(iter_environment_references("${ROOT}/$${LITERAL}/${SECOND}-${1BAD}-${BROKEN"))
+
+    assert references == ["ROOT", "SECOND"]
+
+
+def test_environment_replacement_may_carry_escaped_literals() -> None:
+    assert resolve_environment("${A}", {"A": "pre-$${X}-post"}) == "pre-${X}-post"
+
+
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        ("$${BROKEN", "unterminated escaped token in environment value"),
+        ("$${1BAD}", "invalid escaped token in environment value"),
+    ],
+)
+def test_environment_replacement_escaped_token_errors(replacement: str, message: str) -> None:
+    with pytest.raises(EnvironmentResolutionError, match=message):
+        resolve_environment("${A}", {"A": replacement})

@@ -212,7 +212,6 @@ def run_process(
         thread.start()
 
     outcome = ProcessOutcome.EXITED
-    error: str | None = None
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -234,7 +233,7 @@ def run_process(
         started_at=started_at,
         ended_at=ended_at,
         duration=ended_at - started_at,
-        error=error,
+        error=None,
         stdout_truncated=stdout_capture.truncated,
         stderr_truncated=stderr_capture.truncated,
     )

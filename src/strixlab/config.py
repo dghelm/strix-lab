@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -75,26 +75,63 @@ def read_manifest(path: Path) -> dict[str, Any]:
     return parse_manifest_text(path.read_text(encoding="utf-8"))
 
 
-def _read_escaped_token(
-    value: str,
-    index: int,
-    *,
-    unterminated: str,
-    invalid: Callable[[str], str],
-) -> tuple[str, int]:
-    """Parse one ``$${NAME}`` escape starting at ``index``.
+def _scan_environment_tokens(value: str) -> Iterator[tuple[str, str | None, bool]]:
+    """Tokenize the ``${NAME}`` interpolation grammar in one place.
 
-    ``index`` must point at the opening ``$${``. Returns the literal
-    ``${NAME}`` it expands to and the index just past the closing brace.
+    Yields ``(kind, payload, escaped)`` tokens so every caller shares one
+    definition of both escaping (``$${NAME}`` is a literal ``${NAME}``) and
+    naming (validity is decided here via :data:`ENV_NAME_RE`):
+
+    - ``text``: literal run; ``payload`` is the text.
+    - ``escape``: a ``$${NAME}`` standing for the literal ``${NAME}``.
+    - ``reference``: a live ``${NAME}`` to resolve; ``payload`` is the name.
+    - ``unterminated``: a ``${``/``$${`` with no closing brace; ``payload`` None.
+    - ``invalid``: a token whose brace content is not a valid name; ``payload``
+      is that raw content.
+
+    ``escaped`` marks whether the token began with ``$${``. Malformed tokens are
+    reported rather than raised so read-only callers can skip them while
+    resolving callers can raise their own contextual errors.
     """
 
-    closing = value.find("}", index + 3)
-    if closing < 0:
-        raise EnvironmentResolutionError(unterminated)
-    name = value[index + 3 : closing]
-    if ENV_NAME_RE.fullmatch(name) is None:
-        raise EnvironmentResolutionError(invalid(name))
-    return "${" + name + "}", closing + 1
+    index = 0
+    length = len(value)
+    text_start = 0
+    while index < length:
+        escaped = value.startswith("$${", index)
+        if not (escaped or value.startswith("${", index)):
+            index += 1
+            continue
+        if index > text_start:
+            yield "text", value[text_start:index], False
+        prefix = 3 if escaped else 2
+        closing = value.find("}", index + prefix)
+        if closing < 0:
+            yield "unterminated", None, escaped
+            return
+        name = value[index + prefix : closing]
+        if ENV_NAME_RE.fullmatch(name) is None:
+            yield "invalid", name, escaped
+        else:
+            yield ("escape" if escaped else "reference"), name, escaped
+        index = closing + 1
+        text_start = index
+    if length > text_start:
+        yield "text", value[text_start:length], False
+
+
+def iter_environment_references(value: str) -> Iterator[str]:
+    """Yield each environment name referenced by a live ``${NAME}``.
+
+    Escaped ``$${NAME}`` sequences and malformed tokens are not references and
+    are skipped. This is a read-only scan for callers that must inspect raw,
+    not-yet-resolved values; validation belongs to :func:`resolve_environment`.
+    """
+
+    for kind, payload, _escaped in _scan_environment_tokens(value):
+        if kind == "reference":
+            assert payload is not None
+            yield payload
 
 
 def _resolve_string(value: str, environ: Mapping[str, str]) -> str:
@@ -102,36 +139,32 @@ def _resolve_string(value: str, environ: Mapping[str, str]) -> str:
         return value
 
     output: list[str] = []
-    index = 0
-    while index < len(value):
-        if value.startswith("$${", index):
-            literal, index = _read_escaped_token(
-                value,
-                index,
-                unterminated="unterminated escaped environment token",
-                invalid=lambda name: f"invalid escaped environment token: {name!r}",
-            )
-            output.append(literal)
-            continue
-
-        if value.startswith("${", index):
-            closing = value.find("}", index + 2)
-            if closing < 0:
-                raise EnvironmentResolutionError("unterminated environment token")
-            name = value[index + 2 : closing]
-            if ENV_NAME_RE.fullmatch(name) is None:
-                raise EnvironmentResolutionError(f"invalid environment token: {name!r}")
+    for kind, payload, escaped in _scan_environment_tokens(value):
+        if kind == "text":
+            assert payload is not None
+            output.append(payload)
+        elif kind == "escape":
+            output.append("${" + str(payload) + "}")
+        elif kind == "reference":
+            name = str(payload)
             if name not in environ:
                 raise EnvironmentResolutionError(f"environment variable is not set: {name}")
             replacement = environ[name]
             if not isinstance(replacement, str):
                 raise EnvironmentResolutionError(f"environment value is not a string: {name}")
             output.append(_literal_environment_value(name, replacement))
-            index = closing + 1
-            continue
-
-        output.append(value[index])
-        index += 1
+        elif kind == "unterminated":
+            raise EnvironmentResolutionError(
+                "unterminated escaped environment token"
+                if escaped
+                else "unterminated environment token"
+            )
+        else:  # invalid
+            raise EnvironmentResolutionError(
+                f"invalid escaped environment token: {payload!r}"
+                if escaped
+                else f"invalid environment token: {payload!r}"
+            )
     return "".join(output)
 
 
@@ -142,25 +175,24 @@ def _literal_environment_value(name: str, value: str) -> str:
         return value
 
     output: list[str] = []
-    index = 0
-    while index < len(value):
-        if value.startswith("$${", index):
-            literal, index = _read_escaped_token(
-                value,
-                index,
-                unterminated=f"unterminated escaped token in environment value: {name}",
-                invalid=lambda escaped: (
-                    f"invalid escaped token in environment value {name}: {escaped!r}"
-                ),
+    for kind, payload, escaped in _scan_environment_tokens(value):
+        if kind == "text":
+            assert payload is not None
+            output.append(payload)
+        elif kind == "escape":
+            output.append("${" + str(payload) + "}")
+        elif kind == "unterminated" and escaped:
+            raise EnvironmentResolutionError(
+                f"unterminated escaped token in environment value: {name}"
             )
-            output.append(literal)
-            continue
-        if value.startswith("${", index):
+        elif kind == "invalid" and escaped:
+            raise EnvironmentResolutionError(
+                f"invalid escaped token in environment value {name}: {payload!r}"
+            )
+        else:  # a live ${NAME}, or a malformed non-escaped ${...}
             raise EnvironmentResolutionError(
                 f"environment value introduces an unresolved token: {name}"
             )
-        output.append(value[index])
-        index += 1
     return "".join(output)
 
 

@@ -15,10 +15,10 @@ from rich.logging import RichHandler
 from strixlab import __version__
 from strixlab.config import read_manifest
 from strixlab.doctor import (
+    RedactionContext,
     ReportWriteError,
     SensitiveInterpolationError,
     UnsafeDiagnosticError,
-    assert_terminal_text_safe,
     run_doctor,
 )
 from strixlab.manifests import ManifestRegistry, validate_manifest
@@ -94,9 +94,9 @@ def manifest_validate(
     typer.echo(f"valid raw {kind} manifest: {path}")
 
 
-def _doctor_echo(message: str, environ: dict[str, str], *, err: bool = False) -> None:
+def _doctor_echo(message: str, context: RedactionContext, *, err: bool = False) -> None:
     try:
-        assert_terminal_text_safe(message, environ)
+        context.assert_text_safe(message)
     except UnsafeDiagnosticError:
         typer.echo("doctor failed: unable to safely render terminal output", err=True)
         raise typer.Exit(code=1) from None
@@ -127,6 +127,7 @@ def doctor(
     """Observe machine readiness without changing machine settings."""
 
     frozen_environ = dict(os.environ)
+    context = RedactionContext.from_environ(frozen_environ)
     try:
         result = run_doctor(
             machine,
@@ -135,10 +136,10 @@ def doctor(
             environ=frozen_environ,
         )
     except ValidationError as exc:
-        _doctor_echo("invalid machine profile:", frozen_environ, err=True)
+        _doctor_echo("invalid machine profile:", context, err=True)
         for error in exc.errors(include_input=False, include_url=False):
             location = ".".join(str(part) for part in error["loc"]) or "manifest"
-            _doctor_echo(f"  {location}: {error['msg']}", frozen_environ, err=True)
+            _doctor_echo(f"  {location}: {error['msg']}", context, err=True)
         raise typer.Exit(code=1) from None
     except SensitiveInterpolationError:
         typer.echo(
@@ -154,16 +155,16 @@ def doctor(
         raise typer.Exit(code=1) from None
 
     if result.ready:
-        _doctor_echo(f"ready: {result.path}", frozen_environ)
+        _doctor_echo(f"ready: {result.path}", context)
         return
     for check in result.report.checks:
         if check.status == "blocker":
             _doctor_echo(
                 f"blocker [{check.id}]: {check.message}",
-                frozen_environ,
+                context,
                 err=True,
             )
-    _doctor_echo(f"report: {result.path}", frozen_environ, err=True)
+    _doctor_echo(f"report: {result.path}", context, err=True)
     raise typer.Exit(code=1)
 
 

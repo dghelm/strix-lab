@@ -18,10 +18,10 @@ from strixlab.doctor import (
     CheckV1,
     DoctorReportV1,
     DoctorRun,
+    RedactionContext,
     ReportWriteError,
     SensitiveInterpolationError,
     UnsafeDiagnosticError,
-    _assert_secret_free,
     _write_temp,
     build_report,
     canonical_report_bytes,
@@ -233,12 +233,15 @@ def test_required_and_disabled_telemetry_modes() -> None:
 
 
 def test_report_round_trip_and_secret_redaction() -> None:
+    base = snapshot()
+    assert base.gpu is not None
     value = replace(
-        snapshot(),
+        base,
         tools=(
-            *snapshot().tools,
+            *base.tools,
             ToolFact("extra", "/tool", "prefix top-secret suffix", "ok"),
         ),
+        gpu=replace(base.gpu, marketing_name="top-secret gpu"),
         issues=(ProbeIssue("probe-error", "top-secret leaked"),),
     )
     report = build_report(
@@ -257,8 +260,11 @@ def test_report_round_trip_and_secret_redaction() -> None:
 
 
 def test_final_secret_scan_fails_closed() -> None:
+    context = RedactionContext.from_environ({"API_TOKEN": "top-secret"})
+
+    assert "top-secret" not in repr(context)
     with pytest.raises(UnsafeDiagnosticError):
-        _assert_secret_free(b'{"path":"top-secret"}', {"API_TOKEN": "top-secret"})
+        context.assert_payload_safe(b'{"path":"top-secret"}')
 
 
 def test_sensitive_interpolation_is_rejected() -> None:
@@ -503,9 +509,7 @@ class FakeProbe:
         return self.value
 
     def mark_gpu_skipped(self, value: MachineSnapshot, reason: str) -> MachineSnapshot:
-        return replace(
-            value, issues=(ProbeIssue("gpu-probes-skipped", reason),), gpu_probes_skipped=True
-        )
+        return replace(value, issues=(ProbeIssue("gpu-probes-skipped", reason),))
 
 
 def write_profile(path: Path, lock_path: Path) -> None:
@@ -724,7 +728,7 @@ def test_probe_unavailable_host_and_gpu_paths(
         "cpuinfo-unavailable",
     }
     skipped = probe.mark_gpu_skipped(value, "held")
-    assert skipped.gpu_probes_skipped is True
+    assert any(issue.code == "gpu-probes-skipped" for issue in skipped.issues)
 
     monkeypatch.setattr(sys, "platform", "darwin")
     issues: list[ProbeIssue] = []
