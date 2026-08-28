@@ -1,5 +1,7 @@
 # StrixLab foundation design
 
+The implemented BASE-000 machine-readiness contract is specified in [Machine doctor](doctor.md). It deliberately stops before immutable evidence bundles (`EVIDENCE-001`).
+
 This document is the tracked authority for decisions adopted into StrixLab. It
 intentionally replaces the private implementation handoff as repository-facing
 documentation; the handoff remains ignored reference material.

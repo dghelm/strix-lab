@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -13,6 +14,13 @@ from rich.logging import RichHandler
 
 from strixlab import __version__
 from strixlab.config import read_manifest
+from strixlab.doctor import (
+    ReportWriteError,
+    SensitiveInterpolationError,
+    UnsafeDiagnosticError,
+    assert_terminal_text_safe,
+    run_doctor,
+)
 from strixlab.manifests import ManifestRegistry, validate_manifest
 from strixlab.schema_registry import schema_resource_bytes
 
@@ -84,6 +92,79 @@ def manifest_validate(
         typer.echo(f"invalid raw {kind} manifest: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"valid raw {kind} manifest: {path}")
+
+
+def _doctor_echo(message: str, environ: dict[str, str], *, err: bool = False) -> None:
+    try:
+        assert_terminal_text_safe(message, environ)
+    except UnsafeDiagnosticError:
+        typer.echo("doctor failed: unable to safely render terminal output", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(message, err=err)
+
+
+@app.command("doctor")
+def doctor(
+    machine: Annotated[
+        Path,
+        typer.Option(
+            "--machine",
+            help="Resolved machine-profile YAML path.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="Override the complete doctor report path."),
+    ] = None,
+) -> None:
+    """Observe machine readiness without changing machine settings."""
+
+    frozen_environ = dict(os.environ)
+    try:
+        result = run_doctor(
+            machine,
+            home=home,
+            output=output,
+            environ=frozen_environ,
+        )
+    except ValidationError as exc:
+        _doctor_echo("invalid machine profile:", frozen_environ, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _doctor_echo(f"  {location}: {error['msg']}", frozen_environ, err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        typer.echo(
+            "invalid machine profile: sensitive environment interpolation is forbidden",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except (OSError, yaml.YAMLError):
+        typer.echo("doctor failed: unable to read the machine profile", err=True)
+        raise typer.Exit(code=1) from None
+    except (ReportWriteError, UnsafeDiagnosticError):
+        typer.echo("doctor failed: unable to safely publish the report", err=True)
+        raise typer.Exit(code=1) from None
+
+    if result.ready:
+        _doctor_echo(f"ready: {result.path}", frozen_environ)
+        return
+    for check in result.report.checks:
+        if check.status == "blocker":
+            _doctor_echo(
+                f"blocker [{check.id}]: {check.message}",
+                frozen_environ,
+                err=True,
+            )
+    _doctor_echo(f"report: {result.path}", frozen_environ, err=True)
+    raise typer.Exit(code=1)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

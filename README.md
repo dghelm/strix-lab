@@ -1,5 +1,15 @@
 # StrixLab
 
+## Machine readiness
+
+Run the read-only machine doctor before GPU work:
+
+```bash
+uv run strixlab doctor --machine configs/machines/strix-halo-128g.yaml
+```
+
+It writes a versioned `doctor.json` beneath the resolved StrixLab home, returns 0 only when ready, and never changes clocks, power settings, drivers, or packages. See `docs/doctor.md` for the report and lock contracts.
+
 StrixLab is evidence-first research tooling for reproducible AMD Strix Halo
 optimization experiments. It orchestrates existing runtimes and isolated native
 capsules; it is not an inference runtime or an automatic upstream patch bot.

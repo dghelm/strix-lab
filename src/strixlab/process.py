@@ -1,24 +1,29 @@
-"""Deterministic Linux child-process execution."""
+"""Safe subprocess execution with structured, optionally bounded capture."""
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import signal
 import subprocess
+import threading
 import time
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import BinaryIO
 
 from strixlab.naming import ENV_NAME_RE
 
 TERMINATION_GRACE_SECONDS = 2.0
+_READ_CHUNK_BYTES = 64 * 1024
 
 
 class ProcessOutcome(StrEnum):
+    """High-level process outcome independent of the return code."""
+
     EXITED = "exited"
     TIMED_OUT = "timed_out"
     SPAWN_FAILED = "spawn_failed"
@@ -26,6 +31,8 @@ class ProcessOutcome(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ProcessResult:
+    """Complete structured result from :func:`run_process`."""
+
     outcome: ProcessOutcome
     argv: tuple[str, ...]
     returncode: int | None
@@ -35,49 +42,61 @@ class ProcessResult:
     ended_at: float
     duration: float
     error: str | None
+    stdout_truncated: bool = False
+    stderr_truncated: bool = False
 
 
 def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
     if isinstance(argv, (str, bytes)) or not argv:
-        raise ValueError("argv must be a nonempty sequence of strings")
-    result = tuple(argv)
-    if any(not isinstance(value, str) for value in result):
+        raise ValueError("argv must be a non-empty sequence of strings")
+    normalized = tuple(argv)
+    if any(not isinstance(value, str) for value in normalized):
         raise ValueError("argv entries must be strings")
-    if not result[0]:
-        raise ValueError("argv[0] cannot be empty")
-    if any("\x00" in value for value in result):
-        raise ValueError("argv entries cannot contain NUL bytes")
-    return result
+    if not normalized[0]:
+        raise ValueError("argv[0] must not be empty")
+    if any("\x00" in value for value in normalized):
+        raise ValueError("argv entries must not contain NUL bytes")
+    return normalized
 
 
 def _validate_timeout(timeout: float | None) -> None:
     if timeout is None:
         return
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-        raise ValueError("timeout must be a positive finite number or None")
-    if timeout <= 0 or not math.isfinite(timeout):
-        raise ValueError("timeout must be a positive finite number or None")
+        raise ValueError("timeout must be a finite positive number or None")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be a finite positive number or None")
+
+
+def _validate_output_limit(output_limit_bytes: int | None) -> None:
+    if output_limit_bytes is None:
+        return
+    if isinstance(output_limit_bytes, bool) or not isinstance(output_limit_bytes, int):
+        raise TypeError("output_limit_bytes must be a nonnegative integer or None")
+    if output_limit_bytes < 0:
+        raise ValueError("output_limit_bytes must be a nonnegative integer or None")
 
 
 def _prepare_environment(
     overrides: Mapping[str, str | None] | None,
     *,
     inherit: bool,
-) -> dict[str, str] | None:
+    base: Mapping[str, str] | None,
+) -> dict[str, str]:
+    environment = dict(os.environ if base is None else base) if inherit else {}
     if overrides is None:
-        return None if inherit else {}
-    environment = dict(os.environ) if inherit else {}
-    for key, value in overrides.items():
-        if not isinstance(key, str) or ENV_NAME_RE.fullmatch(key) is None:
-            raise ValueError(f"invalid environment override key: {key!r}")
+        return environment
+    for name, value in overrides.items():
+        if not isinstance(name, str) or not ENV_NAME_RE.fullmatch(name):
+            raise ValueError(f"invalid environment variable name: {name!r}")
         if value is not None and not isinstance(value, str):
-            raise ValueError(f"environment override must be a string or None: {key}")
+            raise ValueError(f"environment variable {name!r} must be a string or None")
         if value is not None and "\x00" in value:
-            raise ValueError("environment overrides cannot contain NUL bytes")
+            raise ValueError(f"environment variable {name!r} must not contain NUL bytes")
         if value is None:
-            environment.pop(key, None)
+            environment.pop(name, None)
         else:
-            environment[key] = value
+            environment[name] = value
     return environment
 
 
@@ -92,21 +111,35 @@ def _process_group_exists(process_group: int) -> bool:
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
-    process_group = process.pid
-    try:
-        os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(process.pid, signal.SIGTERM)
     deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
     while time.monotonic() < deadline:
-        process.poll()
-        if not _process_group_exists(process_group):
-            return
-        time.sleep(0.02)
+        if not _process_group_exists(process.pid):
+            break
+        time.sleep(0.01)
+    if _process_group_exists(process.pid):
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=TERMINATION_GRACE_SECONDS)
 
-    with suppress(ProcessLookupError):
-        os.killpg(process_group, signal.SIGKILL)
+
+@dataclass(slots=True)
+class _Capture:
+    data: bytearray
+    truncated: bool = False
+
+
+def _drain(stream: BinaryIO, capture: _Capture, limit: int | None) -> None:
+    while chunk := stream.read(_READ_CHUNK_BYTES):
+        if limit is None:
+            capture.data.extend(chunk)
+            continue
+        remaining = max(0, limit - len(capture.data))
+        capture.data.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            capture.truncated = True
 
 
 def run_process(
@@ -116,25 +149,30 @@ def run_process(
     timeout: float | None = None,
     env_overrides: Mapping[str, str | None] | None = None,
     inherit_env: bool = True,
+    base_env: Mapping[str, str] | None = None,
+    output_limit_bytes: int | None = None,
 ) -> ProcessResult:
-    """Run a non-interactive process and retain every ordinary failure as data."""
+    """Run a command without a shell and return a structured result.
 
-    arguments = _validate_argv(argv)
+    When ``output_limit_bytes`` is set, each output stream is drained fully while
+    only its leading bytes are retained. This prevents deadlocks and unbounded
+    memory use without changing the historical unbounded default.
+    """
+
+    normalized_argv = _validate_argv(argv)
     _validate_timeout(timeout)
-    working_directory = Path(cwd)
-    if not working_directory.exists():
-        raise FileNotFoundError(working_directory)
-    if not working_directory.is_dir():
-        raise NotADirectoryError(working_directory)
-    environment = _prepare_environment(env_overrides, inherit=inherit_env)
-
+    _validate_output_limit(output_limit_bytes)
+    if not cwd.exists():
+        raise FileNotFoundError(cwd)
+    if not cwd.is_dir():
+        raise NotADirectoryError(cwd)
+    environment = _prepare_environment(env_overrides, inherit=inherit_env, base=base_env)
     started_at = time.monotonic()
     try:
         process = subprocess.Popen(
-            arguments,
-            cwd=working_directory,
+            normalized_argv,
+            cwd=cwd,
             env=environment,
-            shell=False,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -144,7 +182,7 @@ def run_process(
         ended_at = time.monotonic()
         return ProcessResult(
             outcome=ProcessOutcome.SPAWN_FAILED,
-            argv=arguments,
+            argv=normalized_argv,
             returncode=None,
             stdout="",
             stderr="",
@@ -154,25 +192,49 @@ def run_process(
             error=f"{type(exc).__name__}: {exc}",
         )
 
+    assert process.stdout is not None
+    assert process.stderr is not None
+    stdout_capture = _Capture(bytearray())
+    stderr_capture = _Capture(bytearray())
+    threads = (
+        threading.Thread(
+            target=_drain,
+            args=(process.stdout, stdout_capture, output_limit_bytes),
+            daemon=True,
+        ),
+        threading.Thread(
+            target=_drain,
+            args=(process.stderr, stderr_capture, output_limit_bytes),
+            daemon=True,
+        ),
+    )
+    for thread in threads:
+        thread.start()
+
     outcome = ProcessOutcome.EXITED
+    error: str | None = None
     try:
-        stdout_bytes, stderr_bytes = process.communicate(timeout=timeout)
+        process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         outcome = ProcessOutcome.TIMED_OUT
         _terminate_process_group(process)
-        # communicate() may be safely retried after TimeoutExpired. Its final
-        # result is authoritative and already contains earlier captured bytes.
-        stdout_bytes, stderr_bytes = process.communicate()
+    finally:
+        for thread in threads:
+            thread.join()
+        process.stdout.close()
+        process.stderr.close()
 
     ended_at = time.monotonic()
     return ProcessResult(
         outcome=outcome,
-        argv=arguments,
+        argv=normalized_argv,
         returncode=process.returncode,
-        stdout=stdout_bytes.decode("utf-8", errors="replace"),
-        stderr=stderr_bytes.decode("utf-8", errors="replace"),
+        stdout=bytes(stdout_capture.data).decode("utf-8", errors="replace"),
+        stderr=bytes(stderr_capture.data).decode("utf-8", errors="replace"),
         started_at=started_at,
         ended_at=ended_at,
         duration=ended_at - started_at,
-        error=None,
+        error=error,
+        stdout_truncated=stdout_capture.truncated,
+        stderr_truncated=stderr_capture.truncated,
     )

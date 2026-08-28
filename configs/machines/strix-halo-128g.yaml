@@ -1,0 +1,16 @@
+schema_version: 1
+id: strix-halo-128g
+expect:
+  gpu_arch: gfx1151
+  integrated_gpu: true
+  memory_gib_min: 120
+exclusive_lock:
+  path: /tmp/strixlab-gpu.lock
+telemetry:
+  amd_smi: auto
+  sample_interval_ms: 250
+validity:
+  require_ac_power: true
+  max_background_gpu_busy_pct: 10
+  min_available_memory_gib: 8
+  temperature_warn_c: 85
