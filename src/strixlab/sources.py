@@ -11,7 +11,7 @@ import re
 import secrets
 import shutil
 import stat
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -210,6 +210,15 @@ class SourceCleanup:
     preparation_id: str
     state: RegistryState
     record: Path
+
+
+@dataclass(frozen=True, slots=True)
+class SourceLease:
+    preparation_id: str
+    source_id: str
+    worktree: Path
+    record: Path
+    evidence: SourceEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -1478,6 +1487,72 @@ def inspect_source(preparation_id: str, *, home: Path) -> SourceInspection:
         Path(registry.worktree_path).is_dir(),
         Path(registry.record_path).is_dir(),
     )
+
+
+def _allocate_lease_scratch(layout: _Layout, preparation_id: str) -> Path:
+    for _ in range(32):
+        scratch = layout.records / f".lease-{preparation_id}-{secrets.token_hex(16)}"
+        try:
+            scratch.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        metadata = scratch.lstat()
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise SourcePolicyError("source lease scratch ownership is unsafe")
+        fsync_directory(layout.records)
+        return scratch
+    raise SourcePolicyError("unable to allocate unique source lease scratch")
+
+
+@contextlib.contextmanager
+def lease_source(preparation_id: str, *, home: Path) -> Iterator[SourceLease]:
+    """Hold the source lock while yielding one authenticated published candidate."""
+
+    layout = _layout(home, create=False)
+    registry = _load_registry(layout, preparation_id)
+    lock_path = layout.locks / f"source-{registry.source_id}.lock"
+    with exclusive_lock(lock_path) as attempt:
+        if not attempt.acquired:
+            raise SourceBusyError(attempt.reason or "source lock is unavailable")
+        registry = _load_registry(layout, preparation_id)
+        if registry.state is not RegistryState.PUBLISHED:
+            raise SourcePolicyError("source preparation is not published")
+        evidence = _verify_evidence(registry)
+        if evidence is None:
+            raise SourcePolicyError("published source preparation lacks evidence")
+        owner = registry.ownership
+        if owner is None:
+            raise SourceDivergedError("published source preparation lacks ownership")
+        _validate_ownership_binding(registry, owner)
+        worktree = Path(registry.worktree_path)
+        if not _directory_exists_nofollow(worktree, "worktree directory"):
+            raise SourceDivergedError("published source worktree is missing")
+        _validate_inode(worktree, owner.worktree_device, owner.worktree_inode, "worktree directory")
+        admin_exists, admin_locked = _admin_entry_state(owner, allow_missing_lock=False)
+        if not admin_exists or not admin_locked:
+            raise SourceDivergedError("published source worktree ownership is incomplete")
+        scratch = _allocate_lease_scratch(layout, preparation_id)
+        try:
+            git = GitBoundary.create(
+                git_home=layout.git_home,
+                scratch=scratch,
+                locator=registry.mirror_path,
+            )
+            _verify_candidate_for_cleanup(registry, evidence, git, require_match=True)
+            yield SourceLease(
+                preparation_id,
+                registry.source_id,
+                worktree,
+                Path(registry.record_path),
+                evidence,
+            )
+        finally:
+            shutil.rmtree(scratch)
+            fsync_directory(layout.records)
 
 
 def _validate_inode(path: Path, device: int, inode: int, description: str) -> None:

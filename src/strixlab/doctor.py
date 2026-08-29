@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping
@@ -15,7 +14,7 @@ from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
-from strixlab.config import iter_environment_references, read_manifest
+from strixlab.config import read_manifest
 from strixlab.locks import LockAttempt, exclusive_lock
 from strixlab.machine import (
     PROFILER_TOOLS,
@@ -25,14 +24,17 @@ from strixlab.machine import (
 )
 from strixlab.manifests import DashId, MachineProfileV1, resolve_and_validate_manifest
 from strixlab.paths import resolve_home
+from strixlab.secret_policy import (
+    SensitiveInterpolationError,
+    reject_sensitive_interpolations,
+)
+from strixlab.secret_policy import is_sensitive_name as _is_sensitive_name
 from strixlab.serialization import canonical_json_bytes
+
+__all__ = ["SensitiveInterpolationError", "reject_sensitive_interpolations"]
 
 CheckStatus = Literal["pass", "warning", "blocker", "skipped"]
 ReportStatus = Literal["ready", "blocked"]
-SENSITIVE_NAME_RE = re.compile(
-    r"(?:TOKEN|SECRET|PASSWORD|PASSWD|KEY|CREDENTIAL|AUTH|COOKIE|SESSION)",
-    re.IGNORECASE,
-)
 ENVIRONMENT_ALLOWLIST = (
     "ROCM_PATH",
     "HIP_PATH",
@@ -55,9 +57,6 @@ ENVIRONMENT_ALLOWLIST = (
     "MKL_NUM_THREADS",
 )
 MAX_SENSITIVE_NAMES = 128
-KNOWN_NONSECRET_SESSION_NAMES = frozenset(
-    {"DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "XDG_SESSION_ID"}
-)
 
 
 class ReportModel(BaseModel):
@@ -157,10 +156,6 @@ class UnsafeDiagnosticError(RuntimeError):
 
 class ReportWriteError(RuntimeError):
     """Raised when an atomic report publication fails."""
-
-
-class SensitiveInterpolationError(ValueError):
-    """Raised before resolution when a profile references a secret-like name."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,10 +448,6 @@ def evaluate_machine(
     return tuple(checks)
 
 
-def _is_sensitive_name(name: str) -> bool:
-    return name not in KNOWN_NONSECRET_SESSION_NAMES and SENSITIVE_NAME_RE.search(name) is not None
-
-
 def _sensitive_names(environ: Mapping[str, str]) -> list[str]:
     return sorted(name for name, value in environ.items() if value and _is_sensitive_name(name))
 
@@ -473,20 +464,6 @@ def capture_environment(environ: Mapping[str, str]) -> tuple[dict[str, str], Red
         sensitive_names=tuple(names[:MAX_SENSITIVE_NAMES]),
         sensitive_names_truncated=len(names) > MAX_SENSITIVE_NAMES,
     )
-
-
-def reject_sensitive_interpolations(value: Any) -> None:
-    if isinstance(value, str):
-        if any(_is_sensitive_name(name) for name in iter_environment_references(value)):
-            raise SensitiveInterpolationError(
-                "machine profile may not interpolate a sensitive environment variable"
-            )
-    elif isinstance(value, Mapping):
-        for child in value.values():
-            reject_sensitive_interpolations(child)
-    elif isinstance(value, list):
-        for child in value:
-            reject_sensitive_interpolations(child)
 
 
 def _secret_values(environ: Mapping[str, str]) -> tuple[str, ...]:

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,7 @@ from strixlab.sources import (
     SourceTransitionInterrupt,
     cleanup_source,
     inspect_source,
+    lease_source,
     prepare_source,
 )
 
@@ -890,6 +892,63 @@ def test_source_lock_serializes_concurrent_cleanup(tmp_path: Path, upstream: Git
             cleanup_source(prepared.evidence.preparation_id, home=home)
 
     cleanup_source(prepared.evidence.preparation_id, home=home)
+
+
+def test_source_lease_authenticates_candidate_and_blocks_cleanup(
+    tmp_path: Path, upstream: GitRepository
+) -> None:
+    home = tmp_path / "home"
+    prepared = prepare_source(source_lock(upstream), home=home, nonce_factory=fixed_nonce)
+    records = home / "sources" / "records"
+
+    with lease_source(prepared.evidence.preparation_id, home=home) as lease:
+        assert lease.evidence == prepared.evidence
+        assert lease.worktree == prepared.worktree
+        lease_scratch = tuple(records.glob(".lease-*"))
+        assert len(lease_scratch) == 1
+        assert stat.S_IMODE(lease_scratch[0].stat().st_mode) == 0o700
+        with pytest.raises(source_module.SourceBusyError):
+            cleanup_source(prepared.evidence.preparation_id, home=home)
+
+    assert not tuple(records.glob(".lease-*"))
+    cleanup_source(prepared.evidence.preparation_id, home=home)
+
+
+def test_source_lease_removes_private_scratch_when_consumer_fails(
+    tmp_path: Path, upstream: GitRepository
+) -> None:
+    home = tmp_path / "home"
+    prepared = prepare_source(source_lock(upstream), home=home, nonce_factory=fixed_nonce)
+    records = home / "sources" / "records"
+
+    with (
+        pytest.raises(RuntimeError, match="consumer failed"),
+        lease_source(prepared.evidence.preparation_id, home=home),
+    ):
+        assert tuple(records.glob(".lease-*"))
+        raise RuntimeError("consumer failed")
+
+    assert not tuple(records.glob(".lease-*"))
+
+
+def test_source_lease_refuses_repeated_private_scratch_collisions(
+    tmp_path: Path, upstream: GitRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    prepared = prepare_source(source_lock(upstream), home=home, nonce_factory=fixed_nonce)
+    monkeypatch.setattr(source_module.secrets, "token_hex", lambda _size: "c" * 32)
+    collision = (
+        home / "sources" / "records" / f".lease-{prepared.evidence.preparation_id}-{'c' * 32}"
+    )
+    collision.mkdir(mode=0o700)
+
+    with (
+        pytest.raises(source_module.SourcePolicyError, match="unable to allocate unique"),
+        lease_source(prepared.evidence.preparation_id, home=home),
+    ):
+        pytest.fail("colliding lease scratch must not be reused")
+
+    assert collision.is_dir()
 
 
 def test_transition_log_corruption_is_rejected(tmp_path: Path, upstream: GitRepository) -> None:

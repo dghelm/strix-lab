@@ -28,18 +28,35 @@ def build_value() -> dict[str, Any]:
         "source": "strix-llama",
         "generator": "Ninja",
         "build_type": "Release",
-        "environment": {"ROCM_PATH": "${ROCM10_PATH}"},
+        "toolchain": {
+            "mode": "rocm",
+            "prefixes": {"system": "/usr", "rocm": "/opt/rocm-10"},
+            "cmake": "/usr/bin/cmake",
+            "ninja": "/usr/bin/ninja",
+            "c_compiler": "/opt/rocm-10/bin/amdclang",
+            "cxx_compiler": "/opt/rocm-10/bin/amdclang++",
+            "hip_compiler": "/opt/rocm-10/bin/amdclang++",
+            "rocm_prefix": "/opt/rocm-10",
+            "path": ["/opt/rocm-10/bin", "/usr/bin"],
+        },
+        "execution": {
+            "jobs": 8,
+            "timeouts": {
+                "discovery_seconds": 30.0,
+                "configure_seconds": 300.0,
+                "build_seconds": 1800.0,
+                "inspection_seconds": 30.0,
+                "capability_seconds": 30.0,
+            },
+        },
+        "environment": {
+            "path_lists": {"ROCM_PATH": "/opt/rocm-10"},
+            "literals": {"SOURCE_DATE_EPOCH": "0"},
+        },
         "cmake": {
             "GGML_HIP": True,
             "AMDGPU_TARGETS": "gfx1151",
             "GGML_NATIVE": False,
         },
         "targets": ["llama-bench", "llama-server", "test-backend-ops"],
-        "post_build_capture": [
-            "cmake_cache",
-            "binary_hashes",
-            "ldd",
-            "elf_dynamic_section",
-            "compile_commands",
-        ],
     }

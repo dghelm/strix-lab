@@ -14,6 +14,7 @@ from strixlab.manifests import (
     resolve_and_validate_manifest,
     validate_manifest,
 )
+from strixlab.secret_policy import SensitiveInterpolationError
 
 
 @pytest.fixture
@@ -44,7 +45,7 @@ def test_all_v1_manifests_validate(
 ) -> None:
     assert isinstance(validate_manifest("source-lock", source_value), SourceLockV1)
     assert isinstance(validate_manifest("machine", machine_value), MachineProfileV1)
-    assert isinstance(validate_manifest("build", build_value), BuildProfileV1)
+    assert validate_manifest("build", build_value).model_dump(mode="python") == build_value
 
 
 def test_registry_is_extensible_and_sorted() -> None:
@@ -180,17 +181,15 @@ def test_machine_structural_constraints(
         MachineProfileV1.model_validate(machine_value)
 
 
-@pytest.mark.parametrize("field", ["targets", "post_build_capture"])
-def test_build_lists_are_nonempty(field: str, build_value: dict[str, Any]) -> None:
-    build_value[field] = []
+def test_build_targets_are_nonempty(build_value: dict[str, Any]) -> None:
+    build_value["targets"] = []
     with pytest.raises(ValidationError):
         BuildProfileV1.model_validate(build_value)
 
 
-@pytest.mark.parametrize("field", ["targets", "post_build_capture"])
-def test_build_lists_are_ordered_unique(field: str, build_value: dict[str, Any]) -> None:
-    original = build_value[field]
-    build_value[field] = [*original, original[0]]
+def test_build_targets_are_ordered_unique(build_value: dict[str, Any]) -> None:
+    original = build_value["targets"]
+    build_value["targets"] = [*original, original[0]]
     with pytest.raises(ValidationError, match="must be unique"):
         BuildProfileV1.model_validate(build_value)
 
@@ -198,14 +197,11 @@ def test_build_lists_are_ordered_unique(field: str, build_value: dict[str, Any])
 def test_build_list_order_is_preserved(build_value: dict[str, Any]) -> None:
     model = BuildProfileV1.model_validate(build_value)
     assert model.targets == build_value["targets"]
-    assert model.post_build_capture == build_value["post_build_capture"]
 
 
 @pytest.mark.parametrize(
     ("section", "key", "value"),
     [
-        ("environment", "BAD.KEY", "value"),
-        ("environment", "GOOD_KEY", "bad\x00value"),
         ("cmake", "BAD.KEY", True),
         ("cmake", "GOOD_KEY", float("inf")),
     ],
@@ -219,6 +215,109 @@ def test_build_mappings_are_strict(
     build_value[section] = {key: value}
     with pytest.raises(ValidationError):
         BuildProfileV1.model_validate(build_value)
+
+
+def test_build_environment_keys_are_closed(build_value: dict[str, Any]) -> None:
+    build_value["environment"]["path_lists"] = {"PATH": "/usr/bin"}
+    with pytest.raises(ValidationError):
+        BuildProfileV1.model_validate(build_value)
+
+
+@pytest.mark.parametrize(
+    ("mode", "hip_compiler", "rocm_prefix"),
+    [
+        ("rocm", None, "/opt/rocm-10"),
+        ("rocm", "/opt/rocm-10/bin/amdclang++", None),
+        ("host", "/opt/rocm-10/bin/amdclang++", None),
+    ],
+)
+def test_build_toolchain_mode_is_explicit(
+    mode: str,
+    hip_compiler: str | None,
+    rocm_prefix: str | None,
+    build_value: dict[str, Any],
+) -> None:
+    build_value["toolchain"].update(
+        mode=mode,
+        hip_compiler=hip_compiler,
+        rocm_prefix=rocm_prefix,
+    )
+    with pytest.raises(ValidationError):
+        BuildProfileV1.model_validate(build_value)
+
+
+def test_old_build_profile_shape_fails_explicitly(build_value: dict[str, Any]) -> None:
+    build_value.pop("toolchain")
+    build_value.pop("execution")
+    build_value["post_build_capture"] = ["cmake_cache"]
+
+    with pytest.raises(ValidationError, match="toolchain|execution"):
+        BuildProfileV1.model_validate(build_value)
+
+
+def test_build_resolution_rejects_sensitive_interpolation(
+    build_value: dict[str, Any],
+) -> None:
+    build_value["toolchain"]["cmake"] = "${API_TOKEN}/cmake"
+
+    with pytest.raises(SensitiveInterpolationError):
+        resolve_and_validate_manifest("build", build_value, {"API_TOKEN": "/secret"})
+
+
+def test_build_resolution_revalidates_absolute_tool_paths(
+    build_value: dict[str, Any],
+) -> None:
+    build_value["toolchain"]["cmake"] = "${SYSTEM_PREFIX}/bin/cmake"
+
+    model = resolve_and_validate_manifest("build", build_value, {"SYSTEM_PREFIX": "/usr"})
+
+    assert isinstance(model, BuildProfileV1)
+    assert model.toolchain.cmake == "/usr/bin/cmake"
+
+
+def test_raw_build_validation_accepts_a_leading_environment_path(
+    build_value: dict[str, Any],
+) -> None:
+    build_value["toolchain"]["cmake"] = "${SYSTEM_PREFIX}/bin/cmake"
+
+    assert validate_manifest("build", build_value).model_dump()["toolchain"]["cmake"] == (
+        "${SYSTEM_PREFIX}/bin/cmake"
+    )
+
+
+@pytest.mark.parametrize("value", ["${UNTERMINATED", "${BAD-NAME}"])
+def test_raw_build_validation_rejects_invalid_interpolation_grammar(
+    value: str, build_value: dict[str, Any]
+) -> None:
+    build_value["cmake"]["VALUE"] = value
+
+    with pytest.raises(ValueError, match="environment token"):
+        validate_manifest("build", build_value)
+
+
+def test_raw_build_validation_rejects_interpolation_in_closed_fields(
+    build_value: dict[str, Any],
+) -> None:
+    build_value["id"] = "${BUILD_ID}"
+
+    with pytest.raises(ValidationError):
+        validate_manifest("build", build_value)
+
+
+def test_build_cmake_strings_reject_nul_bytes(build_value: dict[str, Any]) -> None:
+    build_value["cmake"]["VALUE"] = "before\x00after"
+
+    with pytest.raises(ValidationError, match="NUL"):
+        BuildProfileV1.model_validate(build_value)
+
+
+def test_build_resolution_rejects_nul_from_environment(
+    build_value: dict[str, Any],
+) -> None:
+    build_value["cmake"]["VALUE"] = "${CMAKE_VALUE}"
+
+    with pytest.raises(ValidationError, match="NUL"):
+        resolve_and_validate_manifest("build", build_value, {"CMAKE_VALUE": "before\x00after"})
 
 
 def test_build_target_grammar(build_value: dict[str, Any]) -> None:

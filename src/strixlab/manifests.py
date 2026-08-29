@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -20,10 +20,12 @@ from pydantic import (
     StringConstraints,
     WithJsonSchema,
     field_validator,
+    model_validator,
 )
 
-from strixlab.config import resolve_environment
+from strixlab.config import iter_environment_references, resolve_environment
 from strixlab.naming import ENV_NAME_PATTERN
+from strixlab.secret_policy import reject_sensitive_interpolations
 
 DASH_ID_PATTERN = r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
 UNDERSCORE_ID_PATTERN = r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$"
@@ -74,6 +76,11 @@ NulFreeString = Annotated[
     AfterValidator(_nul_free_string),
     WithJsonSchema({"type": "string", "pattern": r"^[^\u0000]*$"}),
 ]
+StrictNulFreeString = Annotated[
+    StrictStr,
+    AfterValidator(_nul_free_string),
+    WithJsonSchema({"type": "string", "pattern": r"^[^\u0000]*$"}),
+]
 AbsolutePathString = Annotated[
     str,
     AfterValidator(_absolute_path),
@@ -85,7 +92,7 @@ AbsolutePathString = Annotated[
         }
     ),
 ]
-type CMakeScalar = StrictBool | StrictInt | StrictFloat | StrictStr
+type CMakeScalar = StrictBool | StrictInt | StrictFloat | StrictNulFreeString
 
 
 class ManifestModel(BaseModel):
@@ -201,13 +208,66 @@ class MachineProfileV1(ManifestModel):
     validity: MachineValidityV1
 
 
-CaptureKind = Literal[
-    "cmake_cache",
-    "binary_hashes",
-    "ldd",
-    "elf_dynamic_section",
-    "compile_commands",
+BuildPathEnvironmentKey = Literal[
+    "ROCM_PATH",
+    "HIP_PATH",
+    "LD_LIBRARY_PATH",
+    "CMAKE_PREFIX_PATH",
+    "PKG_CONFIG_PATH",
 ]
+BuildLiteralEnvironmentKey = Literal["SOURCE_DATE_EPOCH"]
+
+
+class BuildToolchainV1(ManifestModel):
+    mode: Literal["host", "rocm"]
+    prefixes: dict[UnderscoreId, AbsolutePathString]
+    cmake: AbsolutePathString
+    ninja: AbsolutePathString
+    c_compiler: AbsolutePathString
+    cxx_compiler: AbsolutePathString
+    hip_compiler: AbsolutePathString | None
+    rocm_prefix: AbsolutePathString | None
+    path: Annotated[
+        list[AbsolutePathString], Field(min_length=1, json_schema_extra={"uniqueItems": True})
+    ]
+
+    @field_validator("path")
+    @classmethod
+    def ordered_unique_path(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("toolchain PATH entries must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def valid_mode(self) -> Self:
+        if not self.prefixes:
+            raise ValueError("toolchain prefixes cannot be empty")
+        if self.mode == "rocm":
+            if self.hip_compiler is None or self.rocm_prefix is None:
+                raise ValueError("ROCm mode requires hip_compiler and rocm_prefix")
+            if self.prefixes.get("rocm") != self.rocm_prefix:
+                raise ValueError("ROCm mode requires a matching 'rocm' prefix")
+        elif self.hip_compiler is not None or self.rocm_prefix is not None:
+            raise ValueError("host mode cannot declare hip_compiler or rocm_prefix")
+        return self
+
+
+class BuildEnvironmentV1(ManifestModel):
+    path_lists: dict[BuildPathEnvironmentKey, NulFreeString]
+    literals: dict[BuildLiteralEnvironmentKey, NulFreeString]
+
+
+class BuildTimeoutsV1(ManifestModel):
+    discovery_seconds: Annotated[float, Field(gt=0, le=3600)]
+    configure_seconds: Annotated[float, Field(gt=0, le=86400)]
+    build_seconds: Annotated[float, Field(gt=0, le=86400)]
+    inspection_seconds: Annotated[float, Field(gt=0, le=3600)]
+    capability_seconds: Annotated[float, Field(gt=0, le=3600)]
+
+
+class BuildExecutionV1(ManifestModel):
+    jobs: Annotated[StrictInt, Field(gt=0, le=1024)]
+    timeouts: BuildTimeoutsV1
 
 
 class BuildProfileV1(ManifestModel):
@@ -216,16 +276,113 @@ class BuildProfileV1(ManifestModel):
     source: DashId
     generator: Literal["Ninja"]
     build_type: Literal["Release", "RelWithDebInfo", "Debug"]
-    environment: dict[EnvironmentKey, NulFreeString]
+    toolchain: BuildToolchainV1
+    execution: BuildExecutionV1
+    environment: BuildEnvironmentV1
     cmake: dict[EnvironmentKey, CMakeScalar]
     targets: Annotated[
         list[BuildTarget], Field(min_length=1, json_schema_extra={"uniqueItems": True})
     ]
-    post_build_capture: Annotated[
-        list[CaptureKind], Field(min_length=1, json_schema_extra={"uniqueItems": True})
+
+    @field_validator("targets")
+    @classmethod
+    def ordered_unique(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("list entries must be unique")
+        return value
+
+
+def _raw_absolute_path(value: str) -> str:
+    references = tuple(iter_environment_references(value))
+    sentinel_environment = {name: f"/__strixlab_environment__/{name}" for name in references}
+    resolved = resolve_environment(value, sentinel_environment)
+    _absolute_path(resolved)
+    return value
+
+
+RawAbsolutePathString = Annotated[
+    str,
+    AfterValidator(_raw_absolute_path),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "minLength": 1,
+            "pattern": r"^(?:(?:\$\{[A-Za-z_][A-Za-z0-9_]*\})|/)[\s\S]*$",
+        }
+    ),
+]
+
+
+def _raw_environment_names(value: Any) -> set[str]:
+    names: set[str] = set()
+    if isinstance(value, str):
+        names.update(iter_environment_references(value))
+    elif isinstance(value, list):
+        for child in value:
+            names.update(_raw_environment_names(child))
+    elif isinstance(value, dict):
+        for child in value.values():
+            names.update(_raw_environment_names(child))
+    return names
+
+
+class _RawBuildToolchainV1(ManifestModel):
+    mode: Literal["host", "rocm"]
+    prefixes: dict[UnderscoreId, RawAbsolutePathString]
+    cmake: RawAbsolutePathString
+    ninja: RawAbsolutePathString
+    c_compiler: RawAbsolutePathString
+    cxx_compiler: RawAbsolutePathString
+    hip_compiler: RawAbsolutePathString | None
+    rocm_prefix: RawAbsolutePathString | None
+    path: Annotated[
+        list[RawAbsolutePathString], Field(min_length=1, json_schema_extra={"uniqueItems": True})
     ]
 
-    @field_validator("targets", "post_build_capture")
+    @field_validator("path")
+    @classmethod
+    def ordered_unique_path(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("toolchain PATH entries must be unique")
+        return value
+
+    @model_validator(mode="after")
+    def valid_mode(self) -> Self:
+        if not self.prefixes:
+            raise ValueError("toolchain prefixes cannot be empty")
+        if self.mode == "rocm":
+            if self.hip_compiler is None or self.rocm_prefix is None:
+                raise ValueError("ROCm mode requires hip_compiler and rocm_prefix")
+            if "rocm" not in self.prefixes:
+                raise ValueError("ROCm mode requires a declared 'rocm' prefix")
+        elif self.hip_compiler is not None or self.rocm_prefix is not None:
+            raise ValueError("host mode cannot declare hip_compiler or rocm_prefix")
+        return self
+
+
+class _RawBuildProfileV1(ManifestModel):
+    schema_version: Literal[1]
+    id: DashId
+    source: DashId
+    generator: Literal["Ninja"]
+    build_type: Literal["Release", "RelWithDebInfo", "Debug"]
+    toolchain: _RawBuildToolchainV1
+    execution: BuildExecutionV1
+    environment: BuildEnvironmentV1
+    cmake: dict[EnvironmentKey, CMakeScalar]
+    targets: Annotated[
+        list[BuildTarget], Field(min_length=1, json_schema_extra={"uniqueItems": True})
+    ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def valid_interpolation_grammar(cls, value: Any) -> Any:
+        names = _raw_environment_names(value)
+        sentinel_environment = {name: f"/__strixlab_environment__/{name}" for name in names}
+        resolve_environment(value, sentinel_environment)
+        return value
+
+    @field_validator("targets")
     @classmethod
     def ordered_unique(cls, value: list[str]) -> list[str]:
         if len(value) != len(set(value)):
@@ -274,8 +431,11 @@ ManifestRegistry.register("build", 1, BuildProfileV1)
 
 
 def validate_manifest(kind: str, value: Mapping[str, Any]) -> ManifestModel:
-    """Validate one already-parsed manifest through the registry."""
+    """Validate one already-parsed raw manifest without resolving its values."""
 
+    if kind == "build":
+        ManifestRegistry.model_for(kind, value.get("schema_version"))
+        return _RawBuildProfileV1.model_validate(value)
     return ManifestRegistry.validate(kind, value)
 
 
@@ -284,7 +444,10 @@ def resolve_and_validate_manifest(
     value: Mapping[str, Any],
     environ: Mapping[str, str],
 ) -> ManifestModel:
-    """Resolve trusted environment values, then validate the resolved manifest."""
+    """Validate raw structure, resolve trusted values, then validate the result."""
 
+    if kind == "build":
+        validate_manifest(kind, value)
+        reject_sensitive_interpolations(value)
     resolved = resolve_environment(dict(value), environ)
-    return validate_manifest(kind, resolved)
+    return ManifestRegistry.validate(kind, resolved)

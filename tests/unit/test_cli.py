@@ -50,12 +50,34 @@ id: hip-rocm10-gfx1151
 source: strix-llama
 generator: Ninja
 build_type: Release
+toolchain:
+  mode: rocm
+  prefixes:
+    system: /usr
+    rocm: "/opt/${ROCM_VERSION}"
+  cmake: "${SYSTEM_PREFIX}/bin/cmake"
+  ninja: /usr/bin/ninja
+  c_compiler: "/opt/${ROCM_VERSION}/bin/amdclang"
+  cxx_compiler: "/opt/${ROCM_VERSION}/bin/amdclang++"
+  hip_compiler: "/opt/${ROCM_VERSION}/bin/amdclang++"
+  rocm_prefix: "/opt/${ROCM_VERSION}"
+  path: ["/opt/${ROCM_VERSION}/bin", /usr/bin]
+execution:
+  jobs: 8
+  timeouts:
+    discovery_seconds: 30.0
+    configure_seconds: 300.0
+    build_seconds: 1800.0
+    inspection_seconds: 30.0
+    capability_seconds: 30.0
 environment:
-  ROCM_PATH: ${ROCM10_PATH}
+  path_lists:
+    ROCM_PATH: "/opt/${ROCM_VERSION}"
+  literals:
+    SOURCE_DATE_EPOCH: "0"
 cmake:
   GGML_HIP: true
 targets: [llama-bench]
-post_build_capture: [binary_hashes]
 """,
         encoding="utf-8",
     )

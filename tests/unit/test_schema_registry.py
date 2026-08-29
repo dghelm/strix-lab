@@ -133,10 +133,10 @@ def test_machine_schema_matches_runtime_absolute_path_constraint() -> None:
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda value: value["environment"].update({"BAD.KEY": "value"}),
+        lambda value: value["environment"]["path_lists"].update({"BAD.KEY": "value"}),
         lambda value: value["cmake"].update({"BAD.KEY": True}),
         lambda value: value.update(targets=["llama-bench", "llama-bench"]),
-        lambda value: value.update(post_build_capture=["ldd", "ldd"]),
+        lambda value: value["toolchain"].update(path=["/usr/bin", "/usr/bin"]),
     ],
 )
 def test_build_schema_matches_runtime_mapping_and_uniqueness_constraints(
@@ -150,7 +150,7 @@ def test_build_schema_matches_runtime_mapping_and_uniqueness_constraints(
     "mutate",
     [
         lambda value: value.update(targets=["llama-bench\n"]),
-        lambda value: value["environment"].update({"BAD_KEY\n": "value"}),
+        lambda value: value["environment"]["path_lists"].update({"BAD_KEY\n": "value"}),
         lambda value: value["cmake"].update({"BAD_KEY\r": True}),
     ],
 )

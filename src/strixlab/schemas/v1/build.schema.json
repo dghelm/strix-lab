@@ -1,5 +1,207 @@
 {
   "$defs": {
+    "BuildEnvironmentV1": {
+      "additionalProperties": false,
+      "properties": {
+        "literals": {
+          "additionalProperties": {
+            "pattern": "^[^\\u0000]*(?![\\s\\S])",
+            "type": "string"
+          },
+          "propertyNames": {
+            "const": "SOURCE_DATE_EPOCH"
+          },
+          "title": "Literals",
+          "type": "object"
+        },
+        "path_lists": {
+          "additionalProperties": {
+            "pattern": "^[^\\u0000]*(?![\\s\\S])",
+            "type": "string"
+          },
+          "propertyNames": {
+            "enum": [
+              "ROCM_PATH",
+              "HIP_PATH",
+              "LD_LIBRARY_PATH",
+              "CMAKE_PREFIX_PATH",
+              "PKG_CONFIG_PATH"
+            ]
+          },
+          "title": "Path Lists",
+          "type": "object"
+        }
+      },
+      "required": [
+        "path_lists",
+        "literals"
+      ],
+      "title": "BuildEnvironmentV1",
+      "type": "object"
+    },
+    "BuildExecutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "jobs": {
+          "exclusiveMinimum": 0,
+          "maximum": 1024,
+          "title": "Jobs",
+          "type": "integer"
+        },
+        "timeouts": {
+          "$ref": "#/$defs/BuildTimeoutsV1"
+        }
+      },
+      "required": [
+        "jobs",
+        "timeouts"
+      ],
+      "title": "BuildExecutionV1",
+      "type": "object"
+    },
+    "BuildTimeoutsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "build_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Build Seconds",
+          "type": "number"
+        },
+        "capability_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Capability Seconds",
+          "type": "number"
+        },
+        "configure_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 86400,
+          "title": "Configure Seconds",
+          "type": "number"
+        },
+        "discovery_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Discovery Seconds",
+          "type": "number"
+        },
+        "inspection_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Inspection Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "discovery_seconds",
+        "configure_seconds",
+        "build_seconds",
+        "inspection_seconds",
+        "capability_seconds"
+      ],
+      "title": "BuildTimeoutsV1",
+      "type": "object"
+    },
+    "BuildToolchainV1": {
+      "additionalProperties": false,
+      "properties": {
+        "c_compiler": {
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+          "title": "C Compiler",
+          "type": "string"
+        },
+        "cmake": {
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+          "title": "Cmake",
+          "type": "string"
+        },
+        "cxx_compiler": {
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+          "title": "Cxx Compiler",
+          "type": "string"
+        },
+        "hip_compiler": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Hip Compiler"
+        },
+        "mode": {
+          "enum": [
+            "host",
+            "rocm"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "ninja": {
+          "minLength": 1,
+          "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+          "title": "Ninja",
+          "type": "string"
+        },
+        "path": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Path",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "prefixes": {
+          "additionalProperties": false,
+          "patternProperties": {
+            "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?![\\s\\S])": {
+              "minLength": 1,
+              "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+              "type": "string"
+            }
+          },
+          "title": "Prefixes",
+          "type": "object"
+        },
+        "rocm_prefix": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Rocm Prefix"
+        }
+      },
+      "required": [
+        "mode",
+        "prefixes",
+        "cmake",
+        "ninja",
+        "c_compiler",
+        "cxx_compiler",
+        "hip_compiler",
+        "rocm_prefix",
+        "path"
+      ],
+      "title": "BuildToolchainV1",
+      "type": "object"
+    },
     "CMakeScalar": {
       "anyOf": [
         {
@@ -12,6 +214,7 @@
           "type": "number"
         },
         {
+          "pattern": "^[^\\u0000]*(?![\\s\\S])",
           "type": "string"
         }
       ]
@@ -41,15 +244,10 @@
       "type": "object"
     },
     "environment": {
-      "additionalProperties": false,
-      "patternProperties": {
-        "^[A-Za-z_][A-Za-z0-9_]*(?![\\s\\S])": {
-          "pattern": "^[^\\u0000]*(?![\\s\\S])",
-          "type": "string"
-        }
-      },
-      "title": "Environment",
-      "type": "object"
+      "$ref": "#/$defs/BuildEnvironmentV1"
+    },
+    "execution": {
+      "$ref": "#/$defs/BuildExecutionV1"
     },
     "generator": {
       "const": "Ninja",
@@ -60,22 +258,6 @@
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
       "title": "Id",
       "type": "string"
-    },
-    "post_build_capture": {
-      "items": {
-        "enum": [
-          "cmake_cache",
-          "binary_hashes",
-          "ldd",
-          "elf_dynamic_section",
-          "compile_commands"
-        ],
-        "type": "string"
-      },
-      "minItems": 1,
-      "title": "Post Build Capture",
-      "type": "array",
-      "uniqueItems": true
     },
     "schema_version": {
       "const": 1,
@@ -96,6 +278,9 @@
       "title": "Targets",
       "type": "array",
       "uniqueItems": true
+    },
+    "toolchain": {
+      "$ref": "#/$defs/BuildToolchainV1"
     }
   },
   "required": [
@@ -104,10 +289,11 @@
     "source",
     "generator",
     "build_type",
+    "toolchain",
+    "execution",
     "environment",
     "cmake",
-    "targets",
-    "post_build_capture"
+    "targets"
   ],
   "title": "BuildProfileV1",
   "type": "object"
