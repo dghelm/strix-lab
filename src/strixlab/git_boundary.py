@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import os
+import secrets
 import shlex
 import shutil
 import stat
@@ -11,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
+from strixlab.secure_fs import write_exclusive
 from strixlab.source_identity import locator_class
 
 _OUTPUT_PREFIX_BYTES = 256 * 1024
@@ -47,23 +50,6 @@ class SshTrust:
     private_key: Path | None = None
     public_key_selector: Path | None = None
     auth_sock: Path | None = None
-
-
-def _write_exclusive(path: Path, content: bytes, mode: int = 0o600) -> None:
-    flags = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags, mode)
-    try:
-        view = memoryview(content)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("short write")
-            view = view[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 def _read_owned(path: Path, *, private: bool = False) -> bytes:
@@ -153,7 +139,7 @@ class GitBoundary:
         false_program = _trusted_executable("false", path)
         config = git_home / "global.config"
         if not config.exists():
-            _write_exclusive(config, b"")
+            write_exclusive(config, b"")
         else:
             config_metadata = config.lstat()
             if (
@@ -192,9 +178,10 @@ class GitBoundary:
         ):
             raise GitBoundaryError("Git exec-path is not trusted")
 
+        protocol = _protocol(locator)
         environment = {
             "GCM_INTERACTIVE": "Never",
-            "GIT_ALLOW_PROTOCOL": _protocol(locator),
+            "GIT_ALLOW_PROTOCOL": "file",
             "GIT_ASKPASS": false_program,
             "GIT_CONFIG_GLOBAL": str(config),
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -210,14 +197,15 @@ class GitBoundary:
             "TMPDIR": str(scratch),
             "TZ": "UTC",
         }
-        if _protocol(locator) == "ssh" or ssh_trust is not None:
+        if protocol == "ssh" or ssh_trust is not None:
             environment.update(_prepare_ssh(ssh_trust, scratch, path))
         return cls(git, environment, scratch)
 
     def for_locator(self, locator: str) -> Mapping[str, str]:
+        protocol = _protocol(locator)
         environment = dict(self.environment)
-        environment["GIT_ALLOW_PROTOCOL"] = _protocol(locator)
-        if _protocol(locator) == "ssh" and "GIT_SSH_COMMAND" not in environment:
+        environment["GIT_ALLOW_PROTOCOL"] = protocol
+        if protocol == "ssh" and "GIT_SSH_COMMAND" not in environment:
             raise GitBoundaryError("ssh-auth-unconfigured")
         return environment
 
@@ -226,12 +214,50 @@ class GitBoundary:
         arguments: Sequence[str],
         *,
         cwd: Path,
-        locator: str | None = None,
         stdout_spool: Path | None = None,
         output_limit_bytes: int | None = _OUTPUT_PREFIX_BYTES,
         allowed_returncodes: frozenset[int] = frozenset({0}),
     ) -> ProcessResult:
-        environment = self.environment if locator is None else self.for_locator(locator)
+        return self._run(
+            arguments,
+            cwd=cwd,
+            environment=self.environment,
+            stdout_spool=stdout_spool,
+            output_limit_bytes=output_limit_bytes,
+            allowed_returncodes=allowed_returncodes,
+        )
+
+    def run_network(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        locator: str,
+        stdout_spool: Path | None = None,
+        output_limit_bytes: int | None = _OUTPUT_PREFIX_BYTES,
+        allowed_returncodes: frozenset[int] = frozenset({0}),
+    ) -> ProcessResult:
+        """Run a transport-bearing Git command with an explicit locator gate."""
+
+        return self._run(
+            arguments,
+            cwd=cwd,
+            environment=self.for_locator(locator),
+            stdout_spool=stdout_spool,
+            output_limit_bytes=output_limit_bytes,
+            allowed_returncodes=allowed_returncodes,
+        )
+
+    def _run(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str],
+        stdout_spool: Path | None,
+        output_limit_bytes: int | None,
+        allowed_returncodes: frozenset[int],
+    ) -> ProcessResult:
         result = run_process(
             [
                 self.executable,
@@ -264,15 +290,31 @@ class GitBoundary:
             )
         return result
 
-    def bytes(self, arguments: Sequence[str], *, cwd: Path, locator: str | None = None) -> bytes:
-        spool = self.scratch / f"git-output-{os.getpid()}-{len(os.listdir(self.scratch))}"
-        result = self.run(
-            arguments,
-            cwd=cwd,
-            locator=locator,
-            stdout_spool=spool,
-            output_limit_bytes=0,
-        )
+    def bytes(self, arguments: Sequence[str], *, cwd: Path) -> bytes:
+        return self._bytes(arguments, cwd=cwd, locator=None)
+
+    def bytes_network(self, arguments: Sequence[str], *, cwd: Path, locator: str) -> builtins.bytes:
+        """Capture a transport-bearing Git command with an explicit locator gate."""
+
+        return self._bytes(arguments, cwd=cwd, locator=locator)
+
+    def _bytes(self, arguments: Sequence[str], *, cwd: Path, locator: str | None) -> builtins.bytes:
+        spool = self.scratch / f"git-output-{secrets.token_hex(8)}"
+        if locator is None:
+            result = self.run(
+                arguments,
+                cwd=cwd,
+                stdout_spool=spool,
+                output_limit_bytes=0,
+            )
+        else:
+            result = self.run_network(
+                arguments,
+                cwd=cwd,
+                locator=locator,
+                stdout_spool=spool,
+                output_limit_bytes=0,
+            )
         try:
             content = spool.read_bytes()
         finally:
@@ -309,7 +351,7 @@ def _prepare_ssh(trust: SshTrust | None, scratch: Path, path: str) -> dict[str, 
         raise GitBoundaryError("ssh-auth-unconfigured")
     ssh = _trusted_executable("ssh", path)
     known_hosts = scratch / "ssh-known-hosts"
-    _write_exclusive(known_hosts, _read_owned(trust.known_hosts))
+    write_exclusive(known_hosts, _read_owned(trust.known_hosts))
     private_mode = trust.private_key is not None
     agent_mode = trust.public_key_selector is not None and trust.auth_sock is not None
     if private_mode == agent_mode:
@@ -318,12 +360,12 @@ def _prepare_ssh(trust: SshTrust | None, scratch: Path, path: str) -> dict[str, 
     if private_mode:
         assert trust.private_key is not None
         identity = scratch / "ssh-identity"
-        _write_exclusive(identity, _read_owned(trust.private_key, private=True))
+        write_exclusive(identity, _read_owned(trust.private_key, private=True))
     else:
         assert trust.public_key_selector is not None
         assert trust.auth_sock is not None
         identity = scratch / "ssh-agent-selector.pub"
-        _write_exclusive(identity, _read_owned(trust.public_key_selector))
+        write_exclusive(identity, _read_owned(trust.public_key_selector))
         socket_metadata = trust.auth_sock.lstat()
         if (
             not trust.auth_sock.is_absolute()

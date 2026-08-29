@@ -7,12 +7,15 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import strixlab.sources as source_module
+from strixlab.git_boundary import GitBoundary, GitBoundaryError
 from strixlab.locks import exclusive_lock
 from strixlab.manifests import SourceLockV1
+from strixlab.process import ProcessOutcome, ProcessResult
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import (
     RegistryState,
@@ -36,6 +39,42 @@ def allow_root_source_tests(monkeypatch: pytest.MonkeyPatch) -> None:
 class GitRepository:
     path: Path
     commit: str
+
+
+def process_result(*, stdout: str = "", returncode: int = 0) -> ProcessResult:
+    return ProcessResult(
+        ProcessOutcome.EXITED,
+        ("git",),
+        returncode,
+        stdout,
+        "",
+        0.0,
+        0.0,
+        0.0,
+        None,
+    )
+
+
+class FakeFetchBoundary:
+    def __init__(self, commit: str, network_errors: list[str]) -> None:
+        self.commit = commit
+        self.network_errors = network_errors
+        self.network_calls: list[tuple[str, ...]] = []
+
+    def run_network(self, arguments: list[str], **_kwargs: object) -> ProcessResult:
+        self.network_calls.append(tuple(arguments))
+        if self.network_errors:
+            raise GitBoundaryError(self.network_errors.pop(0))
+        return process_result()
+
+    def run(self, arguments: list[str], **_kwargs: object) -> ProcessResult:
+        if "cat-file" in arguments:
+            return process_result(stdout="commit\n")
+        if "rev-parse" in arguments:
+            return process_result(stdout=f"{self.commit}\n")
+        if "show-ref" in arguments:
+            return process_result(returncode=1)
+        return process_result()
 
 
 def git(cwd: Path, *arguments: str) -> str:
@@ -155,6 +194,37 @@ def test_prepare_patch_inspect_and_cleanup_are_evidence_first(
     assert git(upstream.path, "status", "--porcelain") == ""
 
 
+def test_patch_content_and_identity_are_fixed_before_slow_git_work(
+    tmp_path: Path, upstream: GitRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch = tmp_path / "candidate.patch"
+    original = b"""diff --git a/hello.txt b/hello.txt
+--- a/hello.txt
++++ b/hello.txt
+@@ -1 +1 @@
+-baseline
++candidate
+"""
+    patch.write_bytes(original)
+    original_prepare_mirror = source_module._prepare_mirror
+
+    def mutate_input_after_staging(*args: object, **kwargs: object) -> Path:
+        patch.write_bytes(b"changed after authenticated read")
+        return original_prepare_mirror(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(source_module, "_prepare_mirror", mutate_input_after_staging)
+    prepared = prepare_source(
+        source_lock(upstream),
+        home=tmp_path / "home",
+        patches=[patch],
+        nonce_factory=fixed_nonce,
+    )
+
+    assert (prepared.record / "patch-001.patch").read_bytes() == original
+    assert prepared.evidence.patches[0].sha256 == hashlib.sha256(original).hexdigest()
+    cleanup_source(prepared.evidence.preparation_id, home=tmp_path / "home")
+
+
 def test_cleanup_refuses_worktree_divergence(tmp_path: Path, upstream: GitRepository) -> None:
     prepared = prepare_source(
         source_lock(upstream),
@@ -240,6 +310,7 @@ def test_submodules_are_materialized_and_verified_one_level_at_a_time(tmp_path: 
     assert submodule.path == "deps/child"
     assert submodule.commit == child.commit
     assert submodule.locator is None
+    assert submodule.locator_sha256 == hashlib.sha256(str(child.path).encode()).hexdigest()
     portable = json.loads((prepared.record / "evidence.json").read_bytes())
     assert str(tmp_path) not in json.dumps(portable)
     cleanup_source(prepared.evidence.preparation_id, home=tmp_path / "home")
@@ -272,6 +343,66 @@ def test_failed_fetch_is_recorded_and_cleanup_is_recoverable(
     assert (home / "sources" / "registry" / preparation_id / "current.json").is_file()
     assert not (home / "sources" / "mirrors" / "fixture.git").exists()
     assert cleanup_source(preparation_id, home=home).state is RegistryState.CLEANED
+
+
+def test_exact_object_fetch_failure_uses_the_validated_branch_fallback(
+    tmp_path: Path, upstream: GitRepository
+) -> None:
+    lock = source_lock(upstream)
+    fake = FakeFetchBoundary(lock.commit, ["exact fetch failed"])
+
+    source_module._fetch_and_verify(
+        cast(GitBoundary, fake),
+        tmp_path / "mirror.git",
+        lock,
+        str(upstream.path),
+        "prep-fixture-0123456789abcdef01234567",
+        tmp_path,
+    )
+
+    assert len(fake.network_calls) == 2
+    assert fake.network_calls[0][-1].endswith(
+        ":refs/strixlab/quarantine/prep-fixture-0123456789abcdef01234567/raw"
+    )
+    assert "refs/heads/main" in fake.network_calls[1][-1]
+
+
+def test_exact_object_fetch_failure_without_a_branch_hint_is_terminal(
+    tmp_path: Path, upstream: GitRepository
+) -> None:
+    lock = source_lock(upstream).model_copy(update={"branch_hint": None})
+    fake = FakeFetchBoundary(lock.commit, ["exact fetch failed"])
+
+    with pytest.raises(SourceCommandError, match="exact fetch failed"):
+        source_module._fetch_and_verify(
+            cast(GitBoundary, fake),
+            tmp_path / "mirror.git",
+            lock,
+            str(upstream.path),
+            "prep-fixture-0123456789abcdef01234567",
+            tmp_path,
+        )
+
+    assert len(fake.network_calls) == 1
+
+
+def test_exact_object_fetch_reports_a_failed_branch_fallback(
+    tmp_path: Path, upstream: GitRepository
+) -> None:
+    lock = source_lock(upstream)
+    fake = FakeFetchBoundary(lock.commit, ["exact fetch failed", "branch fetch failed"])
+
+    with pytest.raises(SourceCommandError, match="exact fetch failed; branch fallback failed"):
+        source_module._fetch_and_verify(
+            cast(GitBoundary, fake),
+            tmp_path / "mirror.git",
+            lock,
+            str(upstream.path),
+            "prep-fixture-0123456789abcdef01234567",
+            tmp_path,
+        )
+
+    assert len(fake.network_calls) == 2
 
 
 def test_patch_symlinks_are_rejected(tmp_path: Path, upstream: GitRepository) -> None:
@@ -619,6 +750,104 @@ def test_submodules_remain_uninitialized_when_lock_disables_them(tmp_path: Path)
     )
     assert not (prepared.worktree / "deps" / "child" / "hello.txt").exists()
     assert prepared.evidence.submodules[0].path == "deps/child"
+    assert prepared.evidence.submodules[0].locator_sha256 is None
+    cleanup_source(prepared.evidence.preparation_id, home=home)
+
+
+def test_remote_submodule_evidence_retains_both_portable_locator_and_digest() -> None:
+    locator = "https://example.test/organization/child.git"
+    evidence = source_module.SubmoduleEvidenceV2(
+        path="deps/child",
+        commit="a" * 40,
+        locator=locator,
+        locator_sha256=hashlib.sha256(locator.encode()).hexdigest(),
+    )
+
+    assert evidence.locator == locator
+    assert evidence.locator_sha256 is not None
+
+
+def test_v1_uninitialized_submodule_evidence_remains_inspectable_and_cleanable(
+    tmp_path: Path,
+) -> None:
+    child = create_repository(tmp_path, "legacy-child")
+    parent = create_repository(tmp_path, "legacy-parent")
+    git(
+        parent.path,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(child.path),
+        "deps/child",
+    )
+    git(parent.path, "commit", "-am", "add child")
+    parent = GitRepository(parent.path, git(parent.path, "rev-parse", "HEAD"))
+    home = tmp_path / "home"
+    prepared = prepare_source(
+        source_lock(parent, submodules=False),
+        home=home,
+        nonce_factory=fixed_nonce,
+    )
+    evidence_path = prepared.record / "evidence.json"
+    evidence = json.loads(evidence_path.read_bytes())
+    evidence["schema_version"] = 1
+    evidence["submodules"][0]["locator_sha256"] = hashlib.sha256(b"uninitialized").hexdigest()
+    legacy_bytes = canonical_json_bytes(evidence)
+    evidence_path.write_bytes(legacy_bytes)
+    current_path = home / "sources" / "registry" / prepared.evidence.preparation_id / "current.json"
+    current = json.loads(current_path.read_bytes())
+    current["evidence_sha256"] = hashlib.sha256(legacy_bytes).hexdigest()
+    current_path.write_bytes(canonical_json_bytes(current))
+
+    inspected = inspect_source(prepared.evidence.preparation_id, home=home)
+    assert inspected.evidence is not None
+    assert inspected.evidence.schema_version == 1
+    assert (
+        cleanup_source(prepared.evidence.preparation_id, home=home).state is RegistryState.CLEANED
+    )
+
+
+def test_v1_initialized_submodule_evidence_rejects_the_legacy_sentinel(
+    tmp_path: Path,
+) -> None:
+    child = create_repository(tmp_path, "initialized-child")
+    parent = create_repository(tmp_path, "initialized-parent")
+    git(
+        parent.path,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(child.path),
+        "deps/child",
+    )
+    git(parent.path, "commit", "-am", "add child")
+    parent = GitRepository(parent.path, git(parent.path, "rev-parse", "HEAD"))
+    home = tmp_path / "home"
+    prepared = prepare_source(
+        source_lock(parent, submodules=True),
+        home=home,
+        nonce_factory=fixed_nonce,
+    )
+    evidence_path = prepared.record / "evidence.json"
+    current_path = home / "sources" / "registry" / prepared.evidence.preparation_id / "current.json"
+    original_evidence = evidence_path.read_bytes()
+    original_current = current_path.read_bytes()
+    evidence = json.loads(original_evidence)
+    evidence["schema_version"] = 1
+    evidence["submodules"][0]["locator_sha256"] = hashlib.sha256(b"uninitialized").hexdigest()
+    legacy_bytes = canonical_json_bytes(evidence)
+    evidence_path.write_bytes(legacy_bytes)
+    current = json.loads(original_current)
+    current["evidence_sha256"] = hashlib.sha256(legacy_bytes).hexdigest()
+    current_path.write_bytes(canonical_json_bytes(current))
+
+    with pytest.raises(SourcePolicyError, match="initialization evidence is inconsistent"):
+        inspect_source(prepared.evidence.preparation_id, home=home)
+
+    evidence_path.write_bytes(original_evidence)
+    current_path.write_bytes(original_current)
     cleanup_source(prepared.evidence.preparation_id, home=home)
 
 

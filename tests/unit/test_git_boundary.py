@@ -36,6 +36,19 @@ def test_boundary_runs_with_an_explicit_hermetic_environment(tmp_path: Path) -> 
         git.for_locator("git@example.test:organization/repository")
 
 
+def test_network_operations_require_a_locator_and_local_operations_use_file_gate(
+    tmp_path: Path,
+) -> None:
+    git = boundary(tmp_path, "https://example.test/repository")
+
+    assert git.environment["GIT_ALLOW_PROTOCOL"] == "file"
+    assert git.for_locator("https://example.test/repository")["GIT_ALLOW_PROTOCOL"] == "https"
+    with pytest.raises(TypeError):
+        git.run_network(["--version"], cwd=tmp_path)  # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        git.bytes_network(["--version"], cwd=tmp_path)  # type: ignore[call-arg]
+
+
 def test_private_key_ssh_trust_is_copied_and_hardened(tmp_path: Path) -> None:
     known_hosts = tmp_path / "known-hosts"
     known_hosts.write_text("example.test ssh-ed25519 fixture\n", encoding="utf-8")

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import BinaryIO, Protocol
 
 from strixlab.naming import ENV_NAME_RE
+from strixlab.secure_fs import exclusive_create_flags, fsync_directory
 
 TERMINATION_GRACE_SECONDS = 2.0
 _READ_CHUNK_BYTES = 64 * 1024
@@ -188,11 +189,8 @@ def _open_spool(path: Path, spool_root: Path) -> _Spool:
         raise FileExistsError(normalized)
     spool = _Spool(final_path=normalized)
     temporary = normalized.parent / f".{normalized.name}.tmp-{secrets.token_hex(12)}"
-    flags = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(temporary, flags, 0o600)
+        descriptor = os.open(temporary, exclusive_create_flags(), 0o600)
     except OSError:
         spool.error = "spool-open-failed"
         return spool
@@ -240,11 +238,7 @@ def _publish_spool(spool: _Spool | None) -> None:
         os.link(spool.temporary_path, spool.final_path, follow_symlinks=False)
         linked = True
         spool.temporary_path.unlink()
-        descriptor = os.open(spool.final_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        fsync_directory(spool.final_path.parent)
         spool.published_path = spool.final_path
     except OSError:
         spool.error = "spool-publish-failed"

@@ -24,6 +24,8 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from strixlab.git_boundary import GitBoundary, GitBoundaryError, SshTrust
 from strixlab.locks import exclusive_lock
 from strixlab.manifests import GitUrl, SourceLockV1
+from strixlab.process import ProcessResult
+from strixlab.secure_fs import fsync_directory, write_exclusive
 from strixlab.serialization import canonical_json_bytes
 from strixlab.source_identity import (
     PatchIdentity,
@@ -44,6 +46,8 @@ MAX_SUBMODULE_CHECKOUT_BYTES = 8 * 1024 * 1024 * 1024
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PREPARATION_ID_RE = re.compile(r"^prep-[a-z][a-z0-9-]*-[0-9a-f]{24}$")
 _GIT_URL_ADAPTER = TypeAdapter(GitUrl)
+_GIT_OUTPUT_PREFIX_BYTES = 256 * 1024
+_LEGACY_UNINITIALIZED_SUBMODULE_SHA256 = hashlib.sha256(b"uninitialized").hexdigest()
 _ZERO_OID = "0" * 40
 
 
@@ -93,15 +97,21 @@ class PatchEvidenceV1(_StoredModel):
     record_file: str
 
 
-class SubmoduleEvidenceV1(_StoredModel):
+class _SubmoduleEvidence(_StoredModel):
     path: str
     commit: str = Field(pattern=r"^[0-9a-f]{40}$")
     locator: str | None
+
+
+class SubmoduleEvidenceV1(_SubmoduleEvidence):
     locator_sha256: str = Field(pattern=_SHA256_RE.pattern)
 
 
-class SourceEvidenceV1(_StoredModel):
-    schema_version: Literal[1] = 1
+class SubmoduleEvidenceV2(_SubmoduleEvidence):
+    locator_sha256: str | None = Field(pattern=_SHA256_RE.pattern)
+
+
+class _SourceEvidence(_StoredModel):
     preparation_id: str = Field(pattern=_PREPARATION_ID_RE.pattern)
     request_digest: str = Field(pattern=_SHA256_RE.pattern)
     source_id: str
@@ -112,7 +122,6 @@ class SourceEvidenceV1(_StoredModel):
     adapter: str
     submodules_enabled: bool
     patches: tuple[PatchEvidenceV1, ...]
-    submodules: tuple[SubmoduleEvidenceV1, ...]
     root_tree: str = Field(pattern=r"^[0-9a-f]{40}$")
     content_tree_id: str = Field(pattern=r"^content-tree-sha256:[0-9a-f]{64}$")
     candidate_id: str = Field(pattern=r"^candidate-sha256:[0-9a-f]{64}$")
@@ -121,6 +130,20 @@ class SourceEvidenceV1(_StoredModel):
     diff_size_bytes: int = Field(ge=0)
     status: tuple[str, ...]
     created_at: str
+
+
+class SourceEvidenceV1(_SourceEvidence):
+    schema_version: Literal[1] = 1
+    submodules: tuple[SubmoduleEvidenceV1, ...]
+
+
+class SourceEvidenceV2(_SourceEvidence):
+    schema_version: Literal[2] = 2
+    submodules: tuple[SubmoduleEvidenceV2, ...]
+
+
+SourceEvidence = SourceEvidenceV1 | SourceEvidenceV2
+_SOURCE_EVIDENCE_ADAPTER: TypeAdapter[SourceEvidence] = TypeAdapter(SourceEvidence)
 
 
 class OwnershipV1(_StoredModel):
@@ -169,7 +192,7 @@ class RequestRecordV1(_StoredModel):
 
 @dataclass(frozen=True, slots=True)
 class SourcePreparation:
-    evidence: SourceEvidenceV1
+    evidence: SourceEvidence
     worktree: Path
     record: Path
 
@@ -177,7 +200,7 @@ class SourcePreparation:
 @dataclass(frozen=True, slots=True)
 class SourceInspection:
     registry: SourceRegistryV1
-    evidence: SourceEvidenceV1 | None
+    evidence: SourceEvidence | None
     worktree_exists: bool
     record_exists: bool
 
@@ -230,14 +253,6 @@ def _portable_locator(locator: str) -> str | None:
     return None if locator_class(locator) in {"local-path", "file"} else locator
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _fsync_tree(root: Path) -> None:
     directories: list[Path] = []
     for directory, names, files in os.walk(root, topdown=True, followlinks=False):
@@ -254,32 +269,15 @@ def _fsync_tree(root: Path) -> None:
                 os.close(descriptor)
         names[:] = [name for name in names if not (current / name).is_symlink()]
     for fsync_path in reversed(directories):
-        _fsync_directory(fsync_path)
-
-
-def _write_exclusive(path: Path, content: bytes) -> None:
-    flags = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        view = memoryview(content)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("short write")
-            view = view[written:]
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        fsync_directory(fsync_path)
 
 
 def _write_atomic(path: Path, content: bytes) -> None:
     temporary = path.parent / f".{path.name}.tmp-{secrets.token_hex(12)}"
-    _write_exclusive(temporary, content)
+    write_exclusive(temporary, content)
     try:
         os.replace(temporary, path)
-        _fsync_directory(path.parent)
+        fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -288,7 +286,7 @@ def _canonical_model(value: BaseModel) -> bytes:
     return canonical_json_bytes(value.model_dump(mode="json"))
 
 
-def _read_model(path: Path, model: type[BaseModel]) -> BaseModel:
+def _read_model_bytes(path: Path, model: type[BaseModel]) -> tuple[BaseModel, bytes]:
     try:
         content = path.read_bytes()
         value = model.model_validate(json.loads(content))
@@ -296,7 +294,23 @@ def _read_model(path: Path, model: type[BaseModel]) -> BaseModel:
         raise SourcePolicyError(f"invalid source record: {path.name}") from exc
     if content != _canonical_model(value):
         raise SourcePolicyError(f"noncanonical source record: {path.name}")
+    return value, content
+
+
+def _read_model(path: Path, model: type[BaseModel]) -> BaseModel:
+    value, _content = _read_model_bytes(path, model)
     return value
+
+
+def _read_evidence(path: Path) -> tuple[SourceEvidence, bytes]:
+    try:
+        content = path.read_bytes()
+        value = _SOURCE_EVIDENCE_ADAPTER.validate_json(content)
+    except (OSError, ValidationError) as exc:
+        raise SourcePolicyError(f"invalid source record: {path.name}") from exc
+    if content != _canonical_model(value):
+        raise SourcePolicyError(f"noncanonical source record: {path.name}")
+    return value, content
 
 
 def _ensure_directory(path: Path) -> None:
@@ -411,6 +425,10 @@ def _current_path(registry_directory: Path) -> Path:
     return registry_directory / "current.json"
 
 
+def _random_nonce() -> str:
+    return secrets.token_hex(16)
+
+
 def _transition(
     registry: SourceRegistryV1,
     state: RegistryState,
@@ -442,8 +460,8 @@ def _transition(
         "timestamp": updated.updated_at,
         "to": state,
     }
-    _write_exclusive(events / f"{sequence:04d}.json", canonical_json_bytes(event))
-    _fsync_directory(events)
+    write_exclusive(events / f"{sequence:04d}.json", canonical_json_bytes(event))
+    fsync_directory(events)
     _write_atomic(_current_path(directory), _canonical_model(updated))
     if hook is not None:
         hook(state)
@@ -456,11 +474,12 @@ def _allocate_registry(
     resolved_locator: str,
     patches: tuple[_PatchInput, ...],
     nonce_factory: Callable[[], str] | None,
-) -> tuple[SourceRegistryV1, RequestRecordV1]:
+) -> SourceRegistryV1:
     patch_identities = tuple(patch.identity for patch in patches)
     digest = request_digest(lock, resolved_locator=resolved_locator, patches=patch_identities)
+    make_nonce = nonce_factory or _random_nonce
     for _ in range(32):
-        raw_nonce = (nonce_factory or (lambda: secrets.token_hex(16)))()
+        raw_nonce = make_nonce()
         if not re.fullmatch(r"[0-9a-f]{32}", raw_nonce):
             raise ValueError("nonce factory must return 32 lowercase hexadecimal characters")
         preparation_id, attempt = preparation_identity(lock.id, digest, bytes.fromhex(raw_nonce))
@@ -525,13 +544,57 @@ def _allocate_registry(
             "timestamp": now,
             "to": RegistryState.ALLOCATED,
         }
-        _write_exclusive(registry_directory / "events" / "0001.json", canonical_json_bytes(event))
-        _write_exclusive(registry_directory / "request.json", _canonical_model(request))
-        _fsync_directory(registry_directory / "events")
-        _write_exclusive(_current_path(registry_directory), _canonical_model(registry))
-        _fsync_directory(registry_directory)
-        return registry, request
+        write_exclusive(registry_directory / "events" / "0001.json", canonical_json_bytes(event))
+        write_exclusive(registry_directory / "request.json", _canonical_model(request))
+        fsync_directory(registry_directory / "events")
+        write_exclusive(_current_path(registry_directory), _canonical_model(registry))
+        fsync_directory(registry_directory)
+        return registry
     raise SourcePolicyError("unable to allocate a unique preparation ID")
+
+
+def _git_result(
+    git: GitBoundary,
+    arguments: Sequence[str],
+    *,
+    cwd: Path,
+    stdout_spool: Path | None = None,
+    output_limit_bytes: int | None = _GIT_OUTPUT_PREFIX_BYTES,
+    allowed_returncodes: frozenset[int] = frozenset({0}),
+) -> ProcessResult:
+    try:
+        return git.run(
+            arguments,
+            cwd=cwd,
+            stdout_spool=stdout_spool,
+            output_limit_bytes=output_limit_bytes,
+            allowed_returncodes=allowed_returncodes,
+        )
+    except GitBoundaryError as exc:
+        raise SourceCommandError(str(exc)) from exc
+
+
+def _git_network_result(
+    git: GitBoundary,
+    arguments: Sequence[str],
+    *,
+    cwd: Path,
+    locator: str,
+    stdout_spool: Path | None = None,
+    output_limit_bytes: int | None = _GIT_OUTPUT_PREFIX_BYTES,
+    allowed_returncodes: frozenset[int] = frozenset({0}),
+) -> ProcessResult:
+    try:
+        return git.run_network(
+            arguments,
+            cwd=cwd,
+            locator=locator,
+            stdout_spool=stdout_spool,
+            output_limit_bytes=output_limit_bytes,
+            allowed_returncodes=allowed_returncodes,
+        )
+    except GitBoundaryError as exc:
+        raise SourceCommandError(str(exc)) from exc
 
 
 def _git_run(
@@ -539,19 +602,31 @@ def _git_run(
     arguments: Sequence[str],
     *,
     cwd: Path,
-    locator: str | None = None,
     allowed_returncodes: frozenset[int] = frozenset({0}),
 ) -> str:
-    try:
-        result = git.run(
-            arguments,
-            cwd=cwd,
-            locator=locator,
-            allowed_returncodes=allowed_returncodes,
-        )
-    except GitBoundaryError as exc:
-        raise SourceCommandError(str(exc)) from exc
-    return result.stdout
+    return _git_result(
+        git,
+        arguments,
+        cwd=cwd,
+        allowed_returncodes=allowed_returncodes,
+    ).stdout
+
+
+def _git_network_run(
+    git: GitBoundary,
+    arguments: Sequence[str],
+    *,
+    cwd: Path,
+    locator: str,
+    allowed_returncodes: frozenset[int] = frozenset({0}),
+) -> str:
+    return _git_network_result(
+        git,
+        arguments,
+        cwd=cwd,
+        locator=locator,
+        allowed_returncodes=allowed_returncodes,
+    ).stdout
 
 
 def _validate_mirror(git: GitBoundary, mirror: Path, locator: str, cwd: Path) -> None:
@@ -573,7 +648,8 @@ def _validate_mirror(git: GitBoundary, mirror: Path, locator: str, cwd: Path) ->
 
 def _promote_verified_ref(git: GitBoundary, mirror: Path, commit: str, cwd: Path) -> None:
     verified = f"refs/strixlab/verified/{commit}"
-    result = git.run(
+    result = _git_result(
+        git,
         ["--git-dir", str(mirror), "show-ref", "--verify", "--hash", verified],
         cwd=cwd,
         allowed_returncodes=frozenset({0, 1, 128}),
@@ -623,45 +699,38 @@ def _fetch_and_verify(
         "--no-recurse-submodules",
     ]
     try:
-        git.run(
+        _git_network_result(
+            git,
             [*fetch_base, "origin", f"{lock.commit}:{raw_ref}"],
             cwd=cwd,
             locator=resolved_locator,
         )
-    except GitBoundaryError as exc:
-        rejected_exact_object = any(
-            marker in exc.stderr.lower()
-            for marker in (
-                "couldn't find remote ref",
-                "not our ref",
-                "unadvertised object",
-                "server does not allow request for unadvertised object",
-            )
-        )
-        if not rejected_exact_object:
-            raise SourceCommandError(str(exc)) from exc
+    except SourceCommandError as exact_error:
         if lock.branch_hint is None:
-            raise SourceCommandError(str(exc)) from exc
+            raise
         _git_run(git, ["check-ref-format", "--branch", lock.branch_hint], cwd=cwd)
         branch_ref = f"refs/strixlab/quarantine/{preparation_id}/branch"
-        _git_run(
-            git,
-            [
-                *fetch_base,
-                "origin",
-                f"+refs/heads/{lock.branch_hint}:{branch_ref}",
-            ],
-            cwd=cwd,
-            locator=resolved_locator,
-        )
-    try:
-        object_type = git.run(
-            ["--git-dir", str(mirror), "cat-file", "-t", lock.commit],
-            cwd=cwd,
-            allowed_returncodes=frozenset({0, 1, 128}),
-        )
-    except GitBoundaryError as exc:
-        raise SourceCommandError(str(exc)) from exc
+        try:
+            _git_network_run(
+                git,
+                [
+                    *fetch_base,
+                    "origin",
+                    f"+refs/heads/{lock.branch_hint}:{branch_ref}",
+                ],
+                cwd=cwd,
+                locator=resolved_locator,
+            )
+        except SourceCommandError as fallback_error:
+            raise SourceCommandError(
+                f"{exact_error}; branch fallback failed: {fallback_error}"
+            ) from fallback_error
+    object_type = _git_result(
+        git,
+        ["--git-dir", str(mirror), "cat-file", "-t", lock.commit],
+        cwd=cwd,
+        allowed_returncodes=frozenset({0, 1, 128}),
+    )
     if object_type.returncode != 0 or object_type.stdout.strip() != "commit":
         raise SourcePolicyError("the pinned Git object is not an exact commit")
     resolved = _git_run(
@@ -710,7 +779,7 @@ def _prepare_mirror(
         _validate_mirror(git, temporary, registry.source_url, layout.root)
         _fsync_tree(temporary)
         temporary.rename(mirror)
-        _fsync_directory(layout.mirrors)
+        fsync_directory(layout.mirrors)
         return mirror
     except BaseException:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -825,7 +894,8 @@ def _submodule_config(
 
 def _detached_head(repository: Path, git: GitBoundary) -> str:
     head = _git_run(git, ["-C", str(repository), "rev-parse", "HEAD"], cwd=repository).strip()
-    symbolic = git.run(
+    symbolic = _git_result(
+        git,
         ["-C", str(repository), "symbolic-ref", "-q", "HEAD"],
         cwd=repository,
         allowed_returncodes=frozenset({0, 1}),
@@ -855,7 +925,8 @@ def _tree_bytes(root: Path) -> int:
 
 def _clear_submodule_config(git: GitBoundary, repository: Path, name: str) -> None:
     for suffix in ("active", "url"):
-        git.run(
+        _git_result(
+            git,
             ["-C", str(repository), "config", "--unset-all", f"submodule.{name}.{suffix}"],
             cwd=repository,
             allowed_returncodes=frozenset({0, 1, 5}),
@@ -871,7 +942,7 @@ def _materialize_submodules(
     prefix: PurePosixPath | None = None,
     depth: int = 0,
     ancestry: set[tuple[str, str]] | None = None,
-) -> tuple[SubmoduleEvidenceV1, ...]:
+) -> tuple[SubmoduleEvidenceV2, ...]:
     if depth >= MAX_SUBMODULE_DEPTH:
         raise SourcePolicyError("submodule depth limit exceeded")
     active = set() if ancestry is None else ancestry
@@ -889,7 +960,7 @@ def _materialize_submodules(
         if identity in active:
             raise SourcePolicyError("recursive submodule identity detected")
         active.add(identity)
-        _git_run(
+        _git_network_run(
             git,
             [
                 "-c",
@@ -920,7 +991,7 @@ def _materialize_submodules(
             raise SourcePolicyError("submodule checkout byte limit exceeded")
         full_path = resolved_prefix / path
         evidence.append(
-            SubmoduleEvidenceV1(
+            SubmoduleEvidenceV2(
                 path=str(full_path),
                 commit=commit,
                 locator=_portable_locator(locator),
@@ -1022,7 +1093,8 @@ def _capture_diff(
     worktree: Path, base_commit: str, destination: Path, git: GitBoundary
 ) -> tuple[str, int]:
     temporary = git.scratch / "candidate.diff"
-    result = git.run(
+    result = _git_result(
+        git,
         [
             "-C",
             str(worktree),
@@ -1040,7 +1112,7 @@ def _capture_diff(
         output_limit_bytes=0,
     )
     os.replace(temporary, destination)
-    _fsync_directory(destination.parent)
+    fsync_directory(destination.parent)
     return result.stdout_sha256, result.stdout_bytes
 
 
@@ -1070,6 +1142,10 @@ def _capture_ownership(
         detached_head=base_commit,
         lock_reason=lock_reason,
     )
+
+
+def _lock_reason(registry: SourceRegistryV1) -> str:
+    return f"strixlab-source-v1:{registry.preparation_id}:{registry.nonce}"
 
 
 def _publish_failure(
@@ -1104,9 +1180,7 @@ def prepare_source(
     with exclusive_lock(lock_path) as attempt:
         if not attempt.acquired:
             raise SourceBusyError(attempt.reason or "source lock is unavailable")
-        registry, _request = _allocate_registry(
-            layout, lock, resolved_locator, patch_inputs, nonce_factory
-        )
+        registry = _allocate_registry(layout, lock, resolved_locator, patch_inputs, nonce_factory)
         registry_directory = Path(registry.registry_path)
         stage = Path(registry.stage_path)
         stage.mkdir(mode=0o700)
@@ -1125,7 +1199,7 @@ def prepare_source(
             for patch in patch_inputs:
                 name = f"patch-{patch.identity.order:03d}.patch"
                 target = stage / name
-                _write_exclusive(target, patch.content)
+                write_exclusive(target, patch.content)
                 patch_files.append(target)
                 patch_evidence.append(
                     PatchEvidenceV1(
@@ -1135,10 +1209,13 @@ def prepare_source(
                         record_file=name,
                     )
                 )
+                del patch
+            patch_identities = tuple(value.identity for value in patch_inputs)
+            patch_inputs = ()
             mirror = _prepare_mirror(git, registry, lock, layout)
             registry = _transition(registry, RegistryState.MIRROR_READY, hook=transition_hook)
             verified_ref = f"refs/strixlab/verified/{lock.commit}"
-            lock_reason = f"strixlab-source-v1:{registry.preparation_id}:{registry.nonce}"
+            lock_reason = _lock_reason(registry)
             worktree = Path(registry.worktree_path)
             _git_run(
                 git,
@@ -1157,7 +1234,7 @@ def prepare_source(
                 cwd=layout.root,
             )
             ownership = _capture_ownership(worktree, mirror, lock.commit, lock_reason, git)
-            _write_exclusive(registry_directory / "owner.json", _canonical_model(ownership))
+            write_exclusive(registry_directory / "owner.json", _canonical_model(ownership))
             registry = _transition(
                 registry,
                 RegistryState.WORKTREE_CREATED,
@@ -1166,7 +1243,6 @@ def prepare_source(
             )
             if _status(worktree, git):
                 raise SourcePolicyError("base source worktree is dirty")
-            root_links = _gitlinks(worktree, git)
             if lock.submodules:
                 submodules = _materialize_submodules(
                     worktree,
@@ -1176,12 +1252,13 @@ def prepare_source(
                 )
                 git.validate_mirror_config(mirror, resolved_locator)
             else:
+                root_links = _gitlinks(worktree, git)
                 submodules = tuple(
-                    SubmoduleEvidenceV1(
+                    SubmoduleEvidenceV2(
                         path=path,
                         commit=commit,
                         locator=None,
-                        locator_sha256=_sha256(b"uninitialized"),
+                        locator_sha256=None,
                     )
                     for path, commit in sorted(root_links.items())
                 )
@@ -1211,7 +1288,6 @@ def prepare_source(
                 raise SourcePolicyError("invalid root tree identity")
             diff_file = "candidate.diff"
             diff_sha256, diff_size = _capture_diff(worktree, lock.commit, stage / diff_file, git)
-            patch_identities = tuple(patch.identity for patch in patch_inputs)
             submodule_identities = tuple(
                 SubmoduleIdentity(value.path, value.commit) for value in submodules
             )
@@ -1219,7 +1295,7 @@ def prepare_source(
                 tree, patches=patch_identities, submodules=submodule_identities
             )
             candidate = candidate_id(lock.commit, content_id, submodules=lock.submodules)
-            evidence = SourceEvidenceV1(
+            evidence = SourceEvidenceV2(
                 preparation_id=registry.preparation_id,
                 request_digest=registry.request_digest,
                 source_id=lock.id,
@@ -1241,14 +1317,14 @@ def prepare_source(
                 created_at=_utc_now(),
             )
             evidence_bytes = _canonical_model(evidence)
-            _write_exclusive(stage / "evidence.json", evidence_bytes)
-            _fsync_directory(stage)
+            write_exclusive(stage / "evidence.json", evidence_bytes)
+            fsync_directory(stage)
             registry = _transition(registry, RegistryState.CANDIDATE_READY, hook=transition_hook)
             shutil.rmtree(scratch)
-            _fsync_directory(stage)
+            fsync_directory(stage)
             record = Path(registry.record_path)
             stage.rename(record)
-            _fsync_directory(layout.records)
+            fsync_directory(layout.records)
             registry = _transition(
                 registry,
                 RegistryState.PUBLISHED,
@@ -1320,9 +1396,7 @@ def _verify_event_log(directory: Path, registry: SourceRegistryV1) -> None:
         raise SourcePolicyError("source transition log disagrees with current state")
 
 
-def _verify_evidence(
-    registry: SourceRegistryV1,
-) -> tuple[SourceEvidenceV1 | None, RequestRecordV1]:
+def _verify_evidence(registry: SourceRegistryV1) -> SourceEvidence | None:
     request_value = _read_model(Path(registry.registry_path) / "request.json", RequestRecordV1)
     assert isinstance(request_value, RequestRecordV1)
     lock = SourceLockV1.model_validate(request_value.source_lock)
@@ -1342,12 +1416,21 @@ def _verify_evidence(
         raise SourcePolicyError("source request identity mismatch")
     evidence_path = Path(registry.record_path) / "evidence.json"
     if not evidence_path.exists():
-        return None, request_value
-    evidence_value = _read_model(evidence_path, SourceEvidenceV1)
-    assert isinstance(evidence_value, SourceEvidenceV1)
-    evidence_bytes = evidence_path.read_bytes()
+        return None
+    evidence_value, evidence_bytes = _read_evidence(evidence_path)
     if registry.evidence_sha256 is not None and _sha256(evidence_bytes) != registry.evidence_sha256:
         raise SourcePolicyError("portable evidence digest mismatch")
+    legacy_inconsistent = isinstance(evidence_value, SourceEvidenceV1) and any(
+        (submodule.locator_sha256 != _LEGACY_UNINITIALIZED_SUBMODULE_SHA256)
+        != evidence_value.submodules_enabled
+        for submodule in evidence_value.submodules
+    )
+    current_inconsistent = isinstance(evidence_value, SourceEvidenceV2) and any(
+        (submodule.locator_sha256 is not None) != evidence_value.submodules_enabled
+        for submodule in evidence_value.submodules
+    )
+    if legacy_inconsistent or current_inconsistent:
+        raise SourcePolicyError("submodule initialization evidence is inconsistent")
     record = Path(registry.record_path)
     for patch in evidence_value.patches:
         content = (record / patch.record_file).read_bytes()
@@ -1376,7 +1459,7 @@ def _verify_evidence(
         or evidence_value.candidate_id != expected_candidate
     ):
         raise SourcePolicyError("portable source identity mismatch")
-    return evidence_value, request_value
+    return evidence_value
 
 
 def inspect_source(preparation_id: str, *, home: Path) -> SourceInspection:
@@ -1386,7 +1469,7 @@ def inspect_source(preparation_id: str, *, home: Path) -> SourceInspection:
         raise SourcePolicyError("invalid preparation ID")
     layout = _layout(home, create=False)
     registry = _load_registry(layout, preparation_id)
-    evidence, _ = _verify_evidence(registry)
+    evidence = _verify_evidence(registry)
     if registry.state in {RegistryState.PUBLISHED, RegistryState.CLEANED} and evidence is None:
         raise SourcePolicyError("published source preparation lacks evidence")
     return SourceInspection(
@@ -1435,7 +1518,7 @@ def _validated_submodule_path(worktree: Path, path: str) -> tuple[Path, bool]:
 
 def _verify_candidate_for_cleanup(
     registry: SourceRegistryV1,
-    evidence: SourceEvidenceV1,
+    evidence: SourceEvidence,
     git: GitBoundary,
     *,
     require_match: bool,
@@ -1462,8 +1545,7 @@ def _verify_candidate_for_cleanup(
     submodule_observations = []
     for submodule in evidence.submodules:
         child, child_exists = _validated_submodule_path(worktree, submodule.path)
-        initialized = submodule.locator_sha256 != _sha256(b"uninitialized")
-        if not initialized:
+        if not evidence.submodules_enabled:
             continue
         child_head = None if not child_exists else _detached_head(child, git)
         child_status_raw = b"" if not child_exists else _raw_status(child, git)
@@ -1539,7 +1621,7 @@ def _validate_ownership_binding(registry: SourceRegistryV1, owner: OwnershipV1) 
     mirror = Path(registry.mirror_path)
     expected_admin_parent = mirror / "worktrees"
     admin = Path(owner.admin_path)
-    expected_lock_reason = f"strixlab-source-v1:{registry.preparation_id}:{registry.nonce}"
+    expected_lock_reason = _lock_reason(registry)
     if (
         Path(owner.registered_path) != expected_worktree
         or admin.parent != expected_admin_parent
@@ -1579,7 +1661,7 @@ def cleanup_source(
     record = Path(registry.record_path)
     if registry.state is RegistryState.CLEANED:
         return SourceCleanup(preparation_id, RegistryState.CLEANED, record)
-    evidence, _ = _verify_evidence(registry)
+    evidence = _verify_evidence(registry)
     lock_path = layout.locks / f"source-{registry.source_id}.lock"
     with exclusive_lock(lock_path) as attempt:
         if not attempt.acquired:
