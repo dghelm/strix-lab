@@ -21,8 +21,12 @@ from strixlab.doctor import (
     UnsafeDiagnosticError,
     run_doctor,
 )
-from strixlab.manifests import ManifestRegistry, validate_manifest
+from strixlab.git_boundary import SshTrust
+from strixlab.manifests import ManifestRegistry, SourceLockV1, validate_manifest
+from strixlab.paths import resolve_home
 from strixlab.schema_registry import schema_resource_bytes
+from strixlab.serialization import canonical_json_bytes
+from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
 
 app = typer.Typer(
     help="Evidence-first optimization research tooling for AMD Strix Halo.",
@@ -31,8 +35,10 @@ app = typer.Typer(
 )
 schema_app = typer.Typer(help="Inspect versioned manifest schemas.")
 manifest_app = typer.Typer(help="Validate versioned manifests.")
+source_app = typer.Typer(help="Prepare and manage isolated Git source worktrees.")
 app.add_typer(schema_app, name="schema")
 app.add_typer(manifest_app, name="manifest")
+app.add_typer(source_app, name="source")
 
 
 def _version_callback(value: bool) -> None:
@@ -92,6 +98,140 @@ def manifest_validate(
         typer.echo(f"invalid raw {kind} manifest: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"valid raw {kind} manifest: {path}")
+
+
+@source_app.command("prepare")
+def source_prepare(
+    manifest: Annotated[
+        Path,
+        typer.Argument(
+            help="Versioned source-lock YAML path.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    patch: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--patch",
+            help="Reviewed patch to stage in order; repeat for multiple patches.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+    ssh_known_hosts: Annotated[
+        Path | None,
+        typer.Option("--ssh-known-hosts", help="Owned SSH known-hosts file."),
+    ] = None,
+    ssh_private_key: Annotated[
+        Path | None,
+        typer.Option("--ssh-private-key", help="Owned mode-0600 SSH private key."),
+    ] = None,
+    ssh_public_key: Annotated[
+        Path | None,
+        typer.Option("--ssh-public-key", help="Public-key selector for agent authentication."),
+    ] = None,
+    ssh_auth_sock: Annotated[
+        Path | None,
+        typer.Option("--ssh-auth-sock", help="Owned SSH agent socket."),
+    ] = None,
+) -> None:
+    """Prepare a pinned detached worktree and immutable source evidence."""
+
+    try:
+        value = read_manifest(manifest)
+        validated = validate_manifest("source-lock", value)
+        if not isinstance(validated, SourceLockV1):
+            raise TypeError("source-lock registry returned the wrong model")
+        ssh_values = (ssh_known_hosts, ssh_private_key, ssh_public_key, ssh_auth_sock)
+        ssh_trust = None
+        if any(value is not None for value in ssh_values):
+            if ssh_known_hosts is None:
+                raise ValueError("--ssh-known-hosts is required for SSH authentication")
+            ssh_trust = SshTrust(
+                known_hosts=ssh_known_hosts,
+                private_key=ssh_private_key,
+                public_key_selector=ssh_public_key,
+                auth_sock=ssh_auth_sock,
+            )
+        result = prepare_source(
+            validated,
+            home=resolve_home(home),
+            patches=patch or (),
+            ssh_trust=ssh_trust,
+        )
+    except ValidationError as exc:
+        typer.echo("invalid source lock:", err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            typer.echo(f"  {location}: {error['msg']}", err=True)
+        raise typer.Exit(code=1) from None
+    except (OSError, SourceError, TypeError, ValueError, yaml.YAMLError) as exc:
+        typer.echo(f"source prepare failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(result.evidence.preparation_id)
+    typer.echo(f"worktree: {result.worktree}")
+    typer.echo(f"record: {result.record}")
+
+
+@source_app.command("inspect")
+def source_inspect(
+    preparation_id: Annotated[str, typer.Argument(help="Preparation ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Print local registry state and portable evidence for a preparation."""
+
+    try:
+        result = inspect_source(preparation_id, home=resolve_home(home))
+    except (OSError, SourceError, ValueError) as exc:
+        typer.echo(f"source inspect failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    payload = {
+        "evidence": None if result.evidence is None else result.evidence.model_dump(mode="json"),
+        "record_exists": result.record_exists,
+        "registry": result.registry.model_dump(mode="json"),
+        "worktree_exists": result.worktree_exists,
+    }
+    typer.echo(canonical_json_bytes(payload).decode(), nl=False)
+
+
+@source_app.command("cleanup")
+def source_cleanup(
+    preparation_id: Annotated[str, typer.Argument(help="Preparation ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+    force_changed: Annotated[
+        bool,
+        typer.Option(
+            "--force-changed",
+            help="Remove a changed candidate after ownership checks and evidence capture.",
+        ),
+    ] = False,
+) -> None:
+    """Remove one exact owned worktree after verifying preserved evidence."""
+
+    try:
+        result = cleanup_source(
+            preparation_id,
+            home=resolve_home(home),
+            force_changed=force_changed,
+        )
+    except (OSError, SourceError, ValueError) as exc:
+        typer.echo(f"source cleanup failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(f"{result.preparation_id}: {result.state}")
+    typer.echo(f"record retained: {result.record}")
 
 
 def _doctor_echo(message: str, context: RedactionContext, *, err: bool = False) -> None:

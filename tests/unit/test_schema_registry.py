@@ -53,6 +53,38 @@ def _assert_runtime_and_schema_reject(kind: str, value: dict[str, Any]) -> None:
 
 
 @pytest.mark.parametrize(
+    ("url", "accepted"),
+    [
+        ("/srv/git/repository", True),
+        ("file:///srv/git/repository", True),
+        ("https://example.test/repository.git", True),
+        ("ssh://git@example.test/repository.git", True),
+        ("git@example.test:organization/repository.git", True),
+        ("relative/repository", False),
+        ("http://example.test/repository.git", False),
+        ("https://user@example.test/repository.git", False),
+        ("https://example.test/repository.git?token=secret", False),
+        ("file://remote-host/srv/repository", False),
+        ("ssh:///missing-host", False),
+    ],
+)
+def test_source_locator_schema_and_runtime_agree(
+    url: str, accepted: bool, source_value: dict[str, Any]
+) -> None:
+    source_value["url"] = url
+    schema = Draft202012Validator(json.loads(schema_resource_bytes("source-lock")))
+
+    runtime_accepts = True
+    try:
+        validate_manifest("source-lock", source_value)
+    except PydanticValidationError:
+        runtime_accepts = False
+    schema_accepts = not tuple(schema.iter_errors(source_value))
+
+    assert runtime_accepts is schema_accepts is accepted
+
+
+@pytest.mark.parametrize(
     "mutate",
     [
         lambda value: value.update(url=""),

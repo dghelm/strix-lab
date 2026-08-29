@@ -52,8 +52,32 @@
       "type": "boolean"
     },
     "url": {
+      "allOf": [
+        {
+          "pattern": "^(?!-)(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*[\\u0000-\\u001f\\u007f])[\\s\\S]+(?![\\s\\S])"
+        },
+        {
+          "anyOf": [
+            {
+              "pattern": "^(?:/[^\\x00-\\x1f\\x7f]*)(?![\\s\\S])"
+            },
+            {
+              "pattern": "^(?:file:///[^\\x00-\\x1f\\x7f?#]*)(?![\\s\\S])"
+            },
+            {
+              "pattern": "^(?:https://[^/@:#?\\s]+(?::[0-9]+)?(?:/[^\\x00-\\x1f\\x7f?#]*)?)(?![\\s\\S])"
+            },
+            {
+              "pattern": "^(?:ssh://(?:[^/@:#?\\s]+@)?[^/@:#?\\s]+(?::[0-9]+)?(?:/[^\\x00-\\x1f\\x7f?#]*)?)(?![\\s\\S])"
+            },
+            {
+              "pattern": "^(?:(?:[A-Za-z_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*:[^/\\\\\\s][^\\\\\\s]*)(?![\\s\\S])"
+            }
+          ]
+        }
+      ],
+      "description": "Absolute local path or credential-free file, HTTPS, or SSH Git locator.",
       "minLength": 1,
-      "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
       "title": "Url",
       "type": "string"
     }

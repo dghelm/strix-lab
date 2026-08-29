@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal
+from urllib.parse import urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -92,11 +94,75 @@ class ManifestModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
 
+_GIT_URL_PATTERNS = (
+    r"/[^\x00-\x1f\x7f]*",
+    r"file:///[^\x00-\x1f\x7f?#]*",
+    r"https://[^/@:#?\s]+(?::[0-9]+)?(?:/[^\x00-\x1f\x7f?#]*)?",
+    r"ssh://(?:[^/@:#?\s]+@)?[^/@:#?\s]+(?::[0-9]+)?(?:/[^\x00-\x1f\x7f?#]*)?",
+    r"(?:[A-Za-z_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9.-]*:[^/\\\s][^\\\s]*",
+)
+
+
+def _validate_git_url(value: str) -> str:
+    if not value or value.startswith("-") or value != value.strip():
+        raise ValueError("Git URL must be a nonempty, non-option value")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError("Git URL cannot contain control characters")
+    if not any(re.fullmatch(pattern, value) for pattern in _GIT_URL_PATTERNS):
+        raise ValueError("unsupported or ambiguous Git URL")
+    if value.startswith("/"):
+        return value
+
+    parsed = urlsplit(value)
+    if "://" in value and parsed.scheme not in {"file", "https", "ssh"}:
+        raise ValueError("unsupported Git URL scheme")
+    if parsed.scheme in {"file", "https", "ssh"}:
+        if parsed.query or parsed.fragment:
+            raise ValueError("Git URL cannot contain a query or fragment")
+        if parsed.username is not None and parsed.scheme in {"file", "https"}:
+            raise ValueError("Git URL cannot contain user information")
+        if parsed.password is not None:
+            raise ValueError("Git URL cannot contain a password")
+        if parsed.scheme == "file" and (parsed.netloc or not parsed.path.startswith("/")):
+            raise ValueError("file Git URLs must contain a local absolute path")
+        if parsed.scheme in {"https", "ssh"} and not parsed.hostname:
+            raise ValueError("remote Git URLs must contain a host")
+        return value
+
+    if re.fullmatch(_GIT_URL_PATTERNS[-1], value):
+        return value
+    raise ValueError("unsupported or ambiguous Git URL")
+
+
+GitUrl = Annotated[
+    str,
+    AfterValidator(_validate_git_url),
+    WithJsonSchema(
+        {
+            "type": "string",
+            "minLength": 1,
+            "allOf": [
+                {
+                    "pattern": (
+                        r"^(?!-)(?!\s)(?![\s\S]*\s$)"
+                        r"(?![\s\S]*[\u0000-\u001f\u007f])[\s\S]+$"
+                    )
+                },
+                {"anyOf": [{"pattern": f"^(?:{pattern})$"} for pattern in _GIT_URL_PATTERNS]},
+            ],
+            "description": (
+                "Absolute local path or credential-free file, HTTPS, or SSH Git locator."
+            ),
+        }
+    ),
+]
+
+
 class SourceLockV1(ManifestModel):
     schema_version: Literal[1]
     id: DashId
     kind: Literal["git"]
-    url: CleanString
+    url: GitUrl
     commit: CommitSha
     branch_hint: CleanString | None = None
     submodules: StrictBool

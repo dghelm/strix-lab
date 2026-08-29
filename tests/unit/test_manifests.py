@@ -69,7 +69,7 @@ def test_trusted_resolution_is_followed_by_validation(source_value: dict[str, An
 def test_trusted_resolution_rejects_newly_invalid_values(source_value: dict[str, Any]) -> None:
     source_value["url"] = "${SOURCE_URL}"
 
-    with pytest.raises(ValidationError, match="value cannot be empty"):
+    with pytest.raises(ValidationError, match="Git URL must be a nonempty"):
         resolve_and_validate_manifest("source-lock", source_value, {"SOURCE_URL": ""})
 
 
@@ -110,6 +110,47 @@ def test_source_defaults_only_branch_hint(source_value: dict[str, Any]) -> None:
 def test_source_contract_is_strict(field: str, value: Any, source_value: dict[str, Any]) -> None:
     source_value[field] = value
     with pytest.raises(ValidationError):
+        SourceLockV1.model_validate(source_value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/srv/git/repository",
+        "file:///srv/git/repository",
+        "https://example.test/repository.git",
+        "ssh://git@example.test/repository.git",
+        "git@example.test:organization/repository.git",
+    ],
+)
+def test_source_git_url_accepts_explicit_supported_locators(
+    url: str, source_value: dict[str, Any]
+) -> None:
+    source_value["url"] = url
+    assert SourceLockV1.model_validate(source_value).url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "relative/repository",
+        "../repository",
+        "--upload-pack=malicious",
+        "http://example.test/repository.git",
+        "https://user@example.test/repository.git",
+        "https://user:secret@example.test/repository.git",
+        "https://example.test/repository.git?token=secret",
+        "https://example.test/repository.git#mutable",
+        "file://remote-host/srv/repository",
+        "ssh:///missing-host",
+        "https://example.test/repository.git\n",
+    ],
+)
+def test_source_git_url_rejects_ambiguous_or_credential_bearing_locators(
+    url: str, source_value: dict[str, Any]
+) -> None:
+    source_value["url"] = url
+    with pytest.raises(ValidationError, match="Git URL|unsupported"):
         SourceLockV1.model_validate(source_value)
 
 
