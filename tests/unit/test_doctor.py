@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sys
 from contextlib import contextmanager
 from dataclasses import replace
@@ -56,6 +57,7 @@ from strixlab.machine import (
 )
 from strixlab.manifests import MachineProfileV1
 from strixlab.process import ProcessOutcome, ProcessResult
+from strixlab.secret_policy import is_sensitive_name
 
 runner = CliRunner()
 NOW = datetime(2026, 8, 28, 20, 0, tzinfo=UTC)
@@ -609,6 +611,14 @@ def test_sensitive_diagnostic_suffix_fails_before_publication(tmp_path: Path) ->
 
 
 def test_cli_ready_and_blocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The CLI builds its RedactionContext from the real process environment. An
+    # ambient sensitive-named var with a short value (e.g. CLAUDE_CODE_CHILD_SESSION=1
+    # under Claude Code) would make redaction refuse the innocuous random tmp path.
+    # Isolate this test from ambient sensitive-named vars; production redaction is
+    # unchanged.
+    for name in list(os.environ):
+        if is_sensitive_name(name):
+            monkeypatch.delenv(name, raising=False)
     report = build_report(profile(), snapshot(), acquired(), {"PATH": "/tools"}, NOW, NOW)
     path = tmp_path / "doctor.json"
     ready = DoctorRun(report=report, path=path)

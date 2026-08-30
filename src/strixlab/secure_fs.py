@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import os
+import stat
 from pathlib import Path
 
 _EXCLUSIVE_CREATE_FLAGS = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
@@ -74,6 +75,82 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def ensure_directory_fsynced(path: Path, *, mode: int = 0o700) -> bool:
+    """Exclusively create one directory when absent, fsyncing its parent on creation.
+
+    Returns ``True`` when this call created the directory (its parent has been
+    flushed so the new entry is durable) and ``False`` when an entry already
+    existed. Creation is a single atomic ``mkdir``: a concurrent creator or any
+    pre-existing entry (including a symlink) raises ``FileExistsError`` internally
+    and yields ``False``, so the primitive never follows or replaces an existing
+    entry. Validating an existing entry (ownership, type) is the caller's
+    responsibility, since the safe/unsafe policy differs per caller.
+    """
+
+    try:
+        os.mkdir(path, mode)
+    except FileExistsError:
+        return False
+    fsync_directory(path.parent)
+    return True
+
+
+def fsync_tree(root: Path) -> None:
+    """Durably flush every regular file and directory under ``root``, plus its parent.
+
+    ``os.walk`` with ``followlinks=False`` never descends through a symlinked
+    directory. Each regular file is opened relative to its directory descriptor
+    with ``O_NOFOLLOW`` and validated as an owned regular file before being
+    flushed, so a symlink or special file swapped in for a race fails closed
+    rather than being followed. Files and then directories are flushed
+    bottom-up, and finally the parent directory, so the tree is durable on
+    return.
+    """
+
+    dir_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+    file_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        dir_flags |= os.O_NOFOLLOW
+        file_flags |= os.O_NOFOLLOW
+    euid = os.geteuid()
+    directories: list[Path] = []
+    for current, _dirs, files in os.walk(root, followlinks=False):
+        directory = Path(current)
+        directories.append(directory)
+        dir_fd = os.open(directory, dir_flags)
+        try:
+            for name in files:
+                # lstat the name, then open it nofollow and confirm the opened
+                # descriptor is the very same regular inode: a symlink swapped in
+                # fails O_NOFOLLOW, and a regular file swapped in between the
+                # lstat and the open is caught by the device/inode comparison.
+                pre = os.lstat(name, dir_fd=dir_fd)
+                if not stat.S_ISREG(pre.st_mode) or pre.st_uid != euid:
+                    raise OSError(f"unsafe file in fsync tree: {directory / name}")
+                descriptor = os.open(name, file_flags, dir_fd=dir_fd)
+                try:
+                    post = os.fstat(descriptor)
+                    if (
+                        not stat.S_ISREG(post.st_mode)
+                        or post.st_uid != euid
+                        or post.st_dev != pre.st_dev
+                        or post.st_ino != pre.st_ino
+                    ):
+                        raise OSError(f"unsafe file replaced during fsync: {directory / name}")
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        finally:
+            os.close(dir_fd)
+    for directory in reversed(directories):
+        descriptor = os.open(directory, dir_flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    fsync_directory(root.parent)
 
 
 def rename_noreplace(source: Path, destination: Path) -> None:

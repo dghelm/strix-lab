@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -456,6 +457,51 @@ def test_layout_rejects_unsafe_state_and_reconciles_a_missing_event(tmp_path: Pa
     inspected = inspect_recipe(_RECIPE, home=home)
     assert inspected.attempts[0].state is AttemptState.ACTIVE
     assert (active.root / "events" / "0002.json").is_file()
+
+
+def test_builds_layout_first_use_creates_full_tree_and_fsyncs_parents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Item 2/6: the control plane creates the storage tree first, so its first-use
+    # creation must durably create every storage root (including materialization and
+    # publication-staging roots) via the shared primitive, fsyncing each parent.
+    import strixlab.secure_fs as secure_fs
+    from strixlab.build_paths import build_storage_roots, storage_root_dirs
+
+    fsynced: list[Path] = []
+    real = secure_fs.fsync_directory
+    monkeypatch.setattr(
+        secure_fs,
+        "fsync_directory",
+        lambda path: (fsynced.append(Path(path)), real(path))[1],
+    )
+    home = tmp_path / "home"
+    build_module._layout(home, create=True)
+    roots = build_storage_roots(home)
+    # Every storage root exists, including the ones only the cache references.
+    for path in storage_root_dirs(roots):
+        assert path.is_dir(), path
+    # builds/ was fsynced as the parent of its children on first creation.
+    assert roots.root in fsynced
+
+
+def test_write_evidence_accumulates_authenticated_manifest(tmp_path: Path) -> None:
+    # The producer inventory is built from bytes captured at write_evidence time, so
+    # the manifest must match a direct digest/size of exactly those bytes, and the
+    # entries must appear once, sorted by path (no pre-publication re-read/hash).
+    home = tmp_path / "home"
+    with begin_build_attempt(_RECIPE, home=home, nonce_factory=_nonce(40)) as attempt:
+        attempt.mark_active()
+        attempt.write_evidence("source/patches/0001.patch", b"beta-blob")
+        attempt.write_evidence("build/artifacts.json", b"alpha")
+        manifest = attempt.evidence_manifest()
+        attempt.finalize(AttemptOutcome.FAILED)
+    by_path = {path: (digest, size) for path, digest, size in manifest}
+    assert by_path["build/artifacts.json"] == (hashlib.sha256(b"alpha").hexdigest(), 5)
+    assert by_path["source/patches/0001.patch"] == (hashlib.sha256(b"beta-blob").hexdigest(), 9)
+    paths = [path for path, _digest, _size in manifest]
+    assert paths == sorted(paths)  # deterministic, sorted, no duplicates
+    assert len(paths) == len(set(paths))
 
 
 def test_recovery_removes_an_orphaned_preallocation_directory(tmp_path: Path) -> None:

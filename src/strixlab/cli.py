@@ -13,6 +13,15 @@ from pydantic import ValidationError
 from rich.logging import RichHandler
 
 from strixlab import __version__
+from strixlab.build_artifacts import BuildArtifactError
+from strixlab.build_cache import BuildCacheError, cleanup_build, inspect_build
+from strixlab.builds import (
+    BuildBusyError,
+    BuildStateError,
+    inspect_attempt,
+    inspect_recipe,
+)
+from strixlab.cmake_build import CMakeBuildError, execute_cmake_build
 from strixlab.config import read_manifest
 from strixlab.doctor import (
     RedactionContext,
@@ -22,11 +31,29 @@ from strixlab.doctor import (
     run_doctor,
 )
 from strixlab.git_boundary import SshTrust
-from strixlab.manifests import ManifestRegistry, SourceLockV1, validate_manifest
+from strixlab.manifests import (
+    BuildProfileV1,
+    ManifestRegistry,
+    SourceLockV1,
+    resolve_and_validate_manifest,
+    validate_manifest,
+)
 from strixlab.paths import resolve_home
 from strixlab.schema_registry import schema_resource_bytes
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
+
+_BUILD_DOMAIN_ERRORS = (
+    OSError,
+    ValueError,
+    yaml.YAMLError,
+    SourceError,
+    CMakeBuildError,
+    BuildCacheError,
+    BuildArtifactError,
+    BuildStateError,
+    BuildBusyError,
+)
 
 app = typer.Typer(
     help="Evidence-first optimization research tooling for AMD Strix Halo.",
@@ -36,9 +63,11 @@ app = typer.Typer(
 schema_app = typer.Typer(help="Inspect versioned manifest schemas.")
 manifest_app = typer.Typer(help="Validate versioned manifests.")
 source_app = typer.Typer(help="Prepare and manage isolated Git source worktrees.")
+build_app = typer.Typer(help="Reproducibly build, inspect, and clean pinned source trees.")
 app.add_typer(schema_app, name="schema")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(source_app, name="source")
+app.add_typer(build_app, name="build")
 
 
 def _version_callback(value: bool) -> None:
@@ -231,6 +260,105 @@ def source_cleanup(
         typer.echo(f"source cleanup failed: {exc}", err=True)
         raise typer.Exit(code=1) from None
     typer.echo(f"{result.preparation_id}: {result.state}")
+    typer.echo(f"record retained: {result.record}")
+
+
+@build_app.command("prepare")
+def build_prepare(
+    preparation_id: Annotated[str, typer.Argument(help="Source preparation ID.")],
+    manifest: Annotated[
+        Path,
+        typer.Argument(
+            help="Versioned build-profile YAML path.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Configure and build a pinned source tree, reusing the cache when possible."""
+
+    try:
+        value = read_manifest(manifest)
+        profile = resolve_and_validate_manifest("build", value, dict(os.environ))
+        if not isinstance(profile, BuildProfileV1):
+            raise TypeError("build registry returned the wrong model")
+        result = execute_cmake_build(preparation_id, profile, home=resolve_home(home))
+    except ValidationError as exc:
+        typer.echo("invalid build profile:", err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            typer.echo(f"  {location}: {error['msg']}", err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        typer.echo(
+            "invalid build profile: sensitive environment interpolation is forbidden", err=True
+        )
+        raise typer.Exit(code=1) from None
+    except _BUILD_DOMAIN_ERRORS as exc:
+        typer.echo(f"build prepare failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(result.build_id)
+    typer.echo(f"execution: {result.execution_class}")
+    typer.echo(f"record: {result.attempt.record}")
+
+
+@build_app.command("inspect")
+def build_inspect(
+    identifier: Annotated[str, typer.Argument(help="Recipe, build, or attempt ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Print verified immutable state for one recipe, build, or attempt ID."""
+
+    try:
+        resolved = resolve_home(home)
+        if identifier.startswith("recipe-sha256:"):
+            payload: dict[str, object] = inspect_recipe(identifier, home=resolved).model_dump(
+                mode="json"
+            )
+        elif identifier.startswith("build-sha256:"):
+            inspection = inspect_build(identifier, home=resolved)
+            payload = {
+                "attested": inspection.attested,
+                "build_id": inspection.build_id,
+                "canonical": inspection.canonical.model_dump(mode="json"),
+                "canonical_record_sha256": inspection.canonical_record_sha256,
+                "root": None if inspection.root is None else str(inspection.root),
+                "state": str(inspection.state),
+            }
+        elif identifier.startswith("attempt-"):
+            payload = inspect_attempt(identifier, home=resolved).model_dump(mode="json")
+        else:
+            raise ValueError("unrecognized build inspection ID")
+    except _BUILD_DOMAIN_ERRORS as exc:
+        typer.echo(f"build inspect failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(canonical_json_bytes(payload).decode(), nl=False)
+
+
+@build_app.command("cleanup")
+def build_cleanup(
+    build_id: Annotated[str, typer.Argument(help="Machine-local build ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Remove one exact verified build root while retaining immutable evidence."""
+
+    try:
+        result = cleanup_build(build_id, home=resolve_home(home))
+    except _BUILD_DOMAIN_ERRORS as exc:
+        typer.echo(f"build cleanup failed: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(f"{result.build_id}: {result.state}")
     typer.echo(f"record retained: {result.record}")
 
 

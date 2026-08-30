@@ -113,10 +113,123 @@ All fields are required and list order is preserved.
 | `environment` | Environment-key to string mapping |
 | `cmake` | CMake-key to finite scalar mapping |
 | `targets` | Nonempty, ordered-unique build-target list |
-| `post_build_capture` | Nonempty, ordered-unique allowlisted capture list |
 
-Allowed capture values are `cmake_cache`, `binary_hashes`, `ldd`,
-`elf_dynamic_section`, and `compile_commands`.
+Post-build evidence is captured unconditionally by the adapter, not selected by a
+manifest field. Before the final configure the adapter installs a versioned CMake
+File API `codemodel-v2` query so that configure emits the reply (whose major
+version is enforced at both the response descriptor and the loaded object), and,
+after the build, discovers each requested target's artifacts from that reply. Each
+artifact is stream-hashed with no whole-file buffer or fixed size cap — only a
+small header is read to detect format — and pre/post descriptor metadata must
+match. For every artifact it records the normalized root-relative path, mode, byte
+size, SHA-256, and format: an `ar` archive, or an ELF with its parsed header type
+(`ET_REL`, `ET_EXEC`, `ET_DYN`, `ET_CORE`). The target's CMake kind must match the
+produced format — executables are ELF `ET_EXEC`/`ET_DYN`, shared/module libraries
+`ET_DYN`, object libraries `ET_REL`, static libraries `ar` archives.
+
+It captures the raw `CMakeCache.txt`, `compile_commands.json` (or an explicit
+absent observation; a dangling symlink at that path is divergent state, not an
+absent observation, and fails closed), and, for every ELF, raw and parsed
+`readelf -d` evidence (the `NEEDED` shared-library list plus the `SONAME`,
+`RPATH`, and `RUNPATH` dynamic entries). Each requested target's File API reply
+must also self-identify with the `id` and `name` of its codemodel reference.
+Only dynamic ELF (`ET_EXEC`/`ET_DYN`)
+is additionally inspected with `ldd`; relocatable objects and archives are not.
+Truncated inspection output is never parsed as complete. Any in-root dynamic
+dependency joins a recomputed runtime closure and is hashed into the artifact set;
+external system libraries remain recorded observations. The `ldd`/`readelf`
+capture tools and each mandatory executable's `--help`/`--version` output are
+captured as provenance. A symlink, special file, escaping path, malformed or
+truncated inspection, target/format mismatch, or missing dependency fails the
+build closed.
+
+These records form the immutable artifact set and canonical build record that key
+the reproducible build cache; identical inputs reuse a materialized build root
+(cache hit) or rebuild one into the same stable path after cleanup (rehydration),
+and any integrity divergence fails closed rather than silently rebuilding. Before
+publishing the canonical record, the producing attempt durably records
+`build/provenance.json` binding the build ID, artifact-set ID, recipe, snapshot,
+and candidate, together with a complete digest/size inventory of every required
+pre-publication evidence file (artifacts, profile, environment, source evidence,
+snapshot manifest, configure caches, compile database, File API replies, tool and
+process observations, and source reproducer bytes). That inventory is accumulated
+from the exact bytes at the moment each evidence file is written, so it needs no
+pre-publication re-read or re-hash of the tree; the immutable record publication
+(`publish_record`) remains the independent on-disk copy/hash boundary, so a later
+tamper of the evidence still fails through record verification. Build inspection
+later authenticates that immutable producer attempt record — read lock-free to
+avoid a recipe→build-ID lock inversion — requires the allowlisted inventory to be
+complete and byte-authentic against the record's own manifest (rejecting missing,
+duplicate, unsafe, or digest-divergent entries), and verifies the referenced source
+diff/patch bytes against the canonical reproducer.
+
+Rehydration equivalence is exactly the artifact-set ID plus the requested-target
+and CMake-selection identity; a rehydrated root's own non-identity observations
+(CMake cache, compile database, inspections, capture tools) may differ from the
+original producer's. Each materialization therefore durably records its own
+validated artifact evidence, journal-bound by digest, and a later cache hit,
+inspection, or cleanup verifies the current root against *that* materialization's
+evidence — never the original producer's — while the canonical record and its
+producer provenance are never mutated.
+
+A materialized root becomes reusable as a cache hit only once an immutable
+post-finalization `build attestation` names the finalized `SUCCESS` attempt that
+completed it, binding the canonical digest, build ID, artifact-set ID, execution
+class, and the exact content-addresses of the producer and attestor attempt
+records. Those record-digest anchors are required to match at reuse, so a
+self-consistent replacement of either immutable record (whose content-address then
+differs) fails closed; during crash-forward recovery, before any attestation
+exists, the producer record digest is additionally anchored to the authoritative
+recipe-index entry (read under the already-held recipe lock, never inverting the
+recipe→build-ID lock order). A normal build's attestor is the producer itself; a
+crash between publication and finalization leaves a PRESENT-but-unattested root,
+which the next attempt completes forward and attests as an explicit `recovered`
+attestation (a distinct finalized SUCCESS attempt, never a false producer SUCCESS
+claim) before the root is treated as reusable. `build inspect` reports that
+crash-forward state as explicitly unattested rather than fully verified, and
+cleanup refuses to destructively remove it.
+
+Publication itself is journaled so it can always be completed forward. Before the
+canonical record is published, the producing attempt writes the canonical bytes to
+a per-build publication-staging file and advances the materialization journal to
+`PUBLISHING`, binding that file's digest. A crash during publication is recovered
+by re-reading those journal-bound staged bytes (or an already-published canonical
+that matches them) and completing the record/index publication and the transition
+to `PRESENT`; the materialized root is never discarded for a publication that had
+begun. A `PUBLISHING` state whose staged bytes and canonical are both unrecoverable
+fails closed as an integrity failure when its root is missing or unverifiable, and
+otherwise discards only a fully owner-authenticated root back to `VACANT`. The
+canonical record, build index, and attestation are each published crash-atomically
+— a fully fsynced same-directory temporary is renamed no-replace and the parent
+fsynced (and accepting a byte-identical existing target still repeats that parent
+fsync) — so a crash can never leave a visible partial immutable file. After a
+canonical digest is journal-bound, any recovery that finds the canonical
+record/index pair missing, corrupt, or divergent is an integrity failure that
+preserves the root and evidence rather than regressing to a fresh state or
+destructively cleaning.
+
+Descriptor-anchored, no-follow containment scopes to the untrusted **read and
+recovery** surface, where an attacker could swap a per-build directory for a
+symlink between operations. Every per-build journal, events, and publication-staging
+directory is opened once from its validated parent storage root with
+`O_DIRECTORY | O_NOFOLLOW`, and all subsequent enumeration, reads, orphan-event
+reconciliation, and the reconciled `current.json` write are performed relative to
+those held descriptors, so a directory symlinked in after validation cannot
+redirect anything, and a dangling per-build entry is corruption rather than absence.
+The write side (a live attempt creating and appending to its own owned journal, and
+`publish_record` copying an owned evidence tree) validates each component owner and
+type and creates entries no-follow, but is not required to re-anchor every write
+through a single held descriptor: it operates on directories the process itself
+created and owns under `0o700` roots, not on attacker-swappable inputs. The parsed
+`readelf`/`ldd` evidence is
+authenticated through the producer provenance, so a cache hit and `build inspect`
+deliberately do not re-execute the inspection tools — a hit still skips all final
+configure and compiler work, and instead reverifies the owned root, the current
+materialization's artifacts, and the attestation immediately before success. The
+only inspection value excluded from any comparison is the raw `ldd` process
+digest, and only from rehydrate equivalence, because it is attempt-variable (ASLR
+randomizes the load addresses in `ldd` output); every other captured field must
+match.
 
 ## Versioning and schemas
 

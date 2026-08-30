@@ -20,6 +20,7 @@ from typing import BinaryIO, Protocol
 
 from strixlab.naming import ENV_NAME_RE
 from strixlab.secure_fs import exclusive_create_flags, fsync_directory
+from strixlab.serialization import canonical_json_bytes
 
 TERMINATION_GRACE_SECONDS = 2.0
 _READ_CHUNK_BYTES = 64 * 1024
@@ -428,3 +429,21 @@ def run_process(
         stderr_spool=None if stderr_target is None else stderr_target.published_path,
         capture_error=_capture_error(stdout_capture, stderr_capture),
     )
+
+
+def process_result_digest(result: ProcessResult) -> str:
+    """Return a stable digest of a process result, including its capture error."""
+
+    return hashlib.sha256(
+        canonical_json_bytes(
+            {
+                "argv": result.argv,
+                "capture_error": result.capture_error,
+                "error": result.error,
+                "outcome": result.outcome,
+                "returncode": result.returncode,
+                "stderr_sha256": result.stderr_sha256,
+                "stdout_sha256": result.stdout_sha256,
+            }
+        )
+    ).hexdigest()

@@ -7,6 +7,7 @@ import os
 import secrets
 import shutil
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -170,14 +171,23 @@ def _fsync_tree(root: Path) -> None:
         fsync_directory(directory)
 
 
-def record_source_digest(source: Path) -> str:
-    """Compute the record digest for an owned evidence tree without copying it."""
+def hash_owned_tree(
+    source: Path, *, skip: Callable[[str], bool] | None = None
+) -> tuple[RecordFileV1, ...]:
+    """Deterministically hash every owned regular file under one evidence tree.
 
-    source_files = _walk_owned_tree(source)
-    if any(relative == _MANIFEST_NAME for relative, _path in source_files):
-        raise BuildRecordError("record input cannot supply record-manifest.json")
+    Uses the same nofollow, ownership-checked, descriptor-based stable-hashing
+    machinery as immutable record verification, so a caller building a
+    prepublication inventory cannot drift from the record verifier. ``skip`` (given
+    a record-relative POSIX path) excludes entries from the returned inventory while
+    still walking the whole tree with the same safety checks; skipped subtrees are
+    not hashed. The result is sorted by path for a canonical inventory.
+    """
+
     files: list[RecordFileV1] = []
-    for relative, path in source_files:
+    for relative, path in _walk_owned_tree(source):
+        if skip is not None and skip(relative):
+            continue
         size, digest, metadata = _hash_regular(path)
         files.append(
             RecordFileV1(
@@ -187,7 +197,16 @@ def record_source_digest(source: Path) -> str:
                 sha256=digest,
             )
         )
-    manifest = RecordManifestV1(files=tuple(sorted(files, key=lambda item: item.path)))
+    return tuple(sorted(files, key=lambda item: item.path))
+
+
+def record_source_digest(source: Path) -> str:
+    """Compute the record digest for an owned evidence tree without copying it."""
+
+    files = hash_owned_tree(source)
+    if any(entry.path == _MANIFEST_NAME for entry in files):
+        raise BuildRecordError("record input cannot supply record-manifest.json")
+    manifest = RecordManifestV1(files=files)
     return _record_digest(canonical_json_bytes(manifest.model_dump(mode="json")))
 
 

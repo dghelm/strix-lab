@@ -60,7 +60,7 @@ class ArtifactIdentity:
     sha256: str
 
 
-_ROOT_PLACEHOLDERS = {
+ROOT_PLACEHOLDERS = {
     "SOURCE_ROOT": "{SOURCE_ROOT}",
     "BUILD_ROOT": "{BUILD_ROOT}",
     "BUILD_HOME": "{BUILD_HOME}",
@@ -405,14 +405,14 @@ def machine_identity_environment(profile: BuildProfileV1) -> tuple[IdentityEntry
 
     values = list(normalized_profile_environment(profile))
     values.extend(IdentityEntry(name, value) for name, value in _EXECUTOR_CONSTANTS.items())
-    values.extend(IdentityEntry(name, value) for name, value in _ROOT_PLACEHOLDERS.items())
+    values.extend(IdentityEntry(name, value) for name, value in ROOT_PLACEHOLDERS.items())
     entries = tuple(values)
     expected_names = frozenset(
         {
             *profile.environment.path_lists,
             *profile.environment.literals,
             *_EXECUTOR_CONSTANTS,
-            *_ROOT_PLACEHOLDERS,
+            *ROOT_PLACEHOLDERS,
         }
     )
     _validated_entries(entries, "machine environment", expected_names=expected_names)

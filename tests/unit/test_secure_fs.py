@@ -26,3 +26,29 @@ def test_write_exclusive_refuses_overwrite_and_symlink_following(tmp_path: Path)
     assert target.read_bytes() == b"target"
 
     fsync_directory(tmp_path)
+
+
+def test_fsync_tree_flushes_files_and_rejects_symlink(tmp_path: Path) -> None:
+    from strixlab.secure_fs import fsync_tree
+
+    root = tmp_path / "tree"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.txt").write_bytes(b"a")
+    (root / "sub" / "b.txt").write_bytes(b"b")
+    fsync_tree(root)  # succeeds over a clean owned tree
+
+    (root / "sub" / "link").symlink_to(root / "a.txt")
+    with pytest.raises(OSError, match="unsafe file in fsync tree"):
+        fsync_tree(root)
+
+
+def test_fsync_tree_rejects_special_file(tmp_path: Path) -> None:
+    import os
+
+    from strixlab.secure_fs import fsync_tree
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    os.mkfifo(root / "pipe")
+    with pytest.raises(OSError, match="unsafe file in fsync tree"):
+        fsync_tree(root)

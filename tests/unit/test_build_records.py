@@ -9,6 +9,7 @@ import pytest
 
 from strixlab.build_records import (
     BuildRecordError,
+    hash_owned_tree,
     publish_record,
     record_source_digest,
     verify_record,
@@ -21,6 +22,42 @@ def _source(tmp_path: Path, content: bytes = b"evidence\n") -> Path:
     (source / "logs" / "configure.stdout").write_bytes(content)
     (source / "registry.json").write_text('{"state":"failed"}\n', encoding="utf-8")
     return source
+
+
+def test_hash_owned_tree_returns_sorted_authenticated_inventory(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    files = hash_owned_tree(source)
+    assert [entry.path for entry in files] == ["logs/configure.stdout", "registry.json"]
+    # Digests match a direct read; the inventory is the same one record verification
+    # authenticates, so a generator and verifier cannot drift.
+    import hashlib
+
+    expected = hashlib.sha256((source / "logs" / "configure.stdout").read_bytes()).hexdigest()
+    assert files[0].sha256 == expected
+
+
+def test_hash_owned_tree_skip_excludes_without_hashing(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    files = hash_owned_tree(source, skip=lambda relative: relative.startswith("logs/"))
+    assert [entry.path for entry in files] == ["registry.json"]
+
+
+def test_hash_owned_tree_rejects_symlinked_file(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    (source / "link.json").symlink_to(source / "registry.json")
+    # A symlink in the tree fails closed via O_NOFOLLOW, never followed.
+    with pytest.raises(BuildRecordError, match="unavailable|not an owned regular file"):
+        hash_owned_tree(source)
+
+
+def test_hash_owned_tree_rejects_symlinked_subdirectory(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    (outside / "secret").write_bytes(b"x")
+    (source / "escape").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(BuildRecordError, match="unsafe directory"):
+        hash_owned_tree(source)
 
 
 def test_publish_record_copies_payloads_and_verifies_manifest(tmp_path: Path) -> None:

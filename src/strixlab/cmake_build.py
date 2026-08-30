@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -12,8 +13,33 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
+from strixlab.build_artifacts import (
+    BuildArtifactsV1,
+    capture_build_artifacts,
+    prepare_file_api_query,
+    verify_artifact_capture,
+)
+from strixlab.build_cache import (
+    BuildCacheError,
+    BuildIdentityProjectionV1,
+    BuildRootOwnerV1,
+    CacheClassification,
+    CanonicalBuildRecordV1,
+    EvidenceRefV1,
+    IdentityEntryV1,
+    ProducerProvenanceV1,
+    SourceBlobRefV1,
+    SourcePatchRefV1,
+    SourceReproducerV1,
+    build_cache_session,
+    cache_environment_projection,
+    identity_models,
+    publish_build_attestation,
+    remove_owned_build_root,
+    tool_models,
+    verify_build_root_owner,
+    write_build_root_owner,
+)
 from strixlab.build_identity import (
     IdentityEntry,
     ToolObservation,
@@ -33,14 +59,13 @@ from strixlab.builds import (
     build_snapshot_directory,
 )
 from strixlab.manifests import BuildProfileV1
-from strixlab.process import ProcessOutcome, ProcessResult, run_process
-from strixlab.secure_fs import fsync_directory, readonly_open_flags, write_exclusive
+from strixlab.process import ProcessOutcome, ProcessResult, process_result_digest, run_process
+from strixlab.secure_fs import fsync_tree, readonly_open_flags
 from strixlab.serialization import canonical_json_bytes
-from strixlab.sources import SourceLease, lease_source
+from strixlab.sources import SourceEvidence, SourceLease, lease_source
 
 _VERSION_LIMIT = 256 * 1024
 _CACHE_LIMIT = 16 * 1024 * 1024
-_OWNER_LIMIT = 4 * 1024
 _LLAMA_CPP_TARGETS = frozenset({"llama-bench", "llama-server", "test-backend-ops"})
 _RESERVED_CMAKE_KEYS = frozenset(
     {
@@ -63,16 +88,6 @@ _RESERVED_CMAKE_KEYS = frozenset(
 
 class CMakeBuildError(RuntimeError):
     """A build tool, configure, selection, or build step failed."""
-
-
-class _BuildRootOwnerV1(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-    schema_version: Literal[1] = 1
-    attempt_id: str = Field(pattern=r"^attempt-[0-9a-f]{24}-[0-9a-f]{32}$")
-    build_id: str = Field(pattern=r"^build-sha256:[0-9a-f]{64}$")
-    root_device: int = Field(ge=0)
-    root_inode: int = Field(gt=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +115,9 @@ class CMakeBuildResult:
     build_root: Path
     selections: tuple[IdentityEntry, ...]
     tools: tuple[ToolObservation, ...]
+    artifacts: BuildArtifactsV1
+    execution_class: Literal["built", "cache-hit", "rehydrated", "recovered"]
+    canonical_record_sha256: str
     attempt: AttemptResult
 
 
@@ -216,19 +234,6 @@ def _read_cache(path: Path) -> bytes:
     return b"".join(chunks)
 
 
-def _result_digest(result: ProcessResult) -> str:
-    value = {
-        "argv": result.argv,
-        "capture_error": result.capture_error,
-        "error": result.error,
-        "outcome": result.outcome,
-        "returncode": result.returncode,
-        "stderr_sha256": result.stderr_sha256,
-        "stdout_sha256": result.stdout_sha256,
-    }
-    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
-
-
 def _require_success(result: ProcessResult, description: str) -> None:
     if (
         result.outcome is not ProcessOutcome.EXITED
@@ -277,7 +282,7 @@ def probe_tools(
                 mode=mode,
                 size_bytes=size,
                 sha256=digest,
-                version_sha256=_result_digest(result),
+                version_sha256=process_result_digest(result),
                 search_sha256=hashlib.sha256(
                     canonical_json_bytes(
                         {"name": configured.name, "resolved": str(Path(discovered))}
@@ -327,7 +332,7 @@ def probe_selected_tools(
                 mode=mode,
                 size_bytes=size,
                 sha256=digest,
-                version_sha256=_result_digest(result),
+                version_sha256=process_result_digest(result),
                 search_sha256=hashlib.sha256(
                     canonical_json_bytes({"cache_key": key, "resolved": str(realpath)})
                 ).hexdigest(),
@@ -515,82 +520,6 @@ def _record_failure_evidence(attempt: BuildAttemptSession) -> None:
             )
 
 
-def _write_build_root_owner(root: Path, attempt_id: str, build_id: str) -> _BuildRootOwnerV1:
-    metadata = root.lstat()
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-    ):
-        raise CMakeBuildError(f"build root is unsafe: {root}")
-    owner = _BuildRootOwnerV1(
-        attempt_id=attempt_id,
-        build_id=build_id,
-        root_device=metadata.st_dev,
-        root_inode=metadata.st_ino,
-    )
-    write_exclusive(
-        root / ".strixlab-owner.json",
-        canonical_json_bytes(owner.model_dump(mode="json")),
-        0o400,
-    )
-    return owner
-
-
-def _read_build_root_owner(root: Path) -> _BuildRootOwnerV1:
-    path = root / ".strixlab-owner.json"
-    try:
-        descriptor = os.open(path, readonly_open_flags())
-    except OSError as exc:
-        raise CMakeBuildError("build-root ownership marker is unavailable") from exc
-    chunks: list[bytes] = []
-    size = 0
-    try:
-        metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o400
-        ):
-            raise CMakeBuildError("build-root ownership marker is unsafe")
-        while chunk := os.read(descriptor, 4096):
-            size += len(chunk)
-            if size > _OWNER_LIMIT:
-                raise CMakeBuildError("build-root ownership marker exceeds the size limit")
-            chunks.append(chunk)
-    finally:
-        os.close(descriptor)
-    try:
-        return _BuildRootOwnerV1.model_validate_json(b"".join(chunks))
-    except ValidationError as exc:
-        raise CMakeBuildError("build-root ownership marker is invalid") from exc
-
-
-def _verify_build_root_owner(root: Path, expected: _BuildRootOwnerV1) -> None:
-    try:
-        metadata = root.lstat()
-    except OSError as exc:
-        raise CMakeBuildError("owned build root is unavailable") from exc
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or metadata.st_dev != expected.root_device
-        or metadata.st_ino != expected.root_inode
-    ):
-        raise CMakeBuildError("build-root ownership changed during the build")
-    if _read_build_root_owner(root) != expected:
-        raise CMakeBuildError("build-root ownership changed during the build")
-
-
-def _remove_failed_build_root(root: Path | None, owner: _BuildRootOwnerV1 | None) -> None:
-    if root is None or owner is None:
-        return
-    _verify_build_root_owner(root, owner)
-    shutil.rmtree(root)
-    fsync_directory(root.parent)
-
-
 def _run_configure(
     profile: BuildProfileV1,
     *,
@@ -660,11 +589,13 @@ def _revalidate_before_finalize(
     cache: Mapping[str, str],
     snapshot: SourceSnapshot,
     root: Path,
-    owner: _BuildRootOwnerV1,
+    owner: BuildRootOwnerV1,
     expected_tools: ToolProbe,
+    expected_artifacts: BuildArtifactsV1,
     environment: Mapping[str, str],
     attempt: BuildAttemptSession,
     runner: ProcessRunner,
+    verify_artifacts: bool = True,
 ) -> None:
     reverified_tools = _combine_tool_probes(
         probe_tools(profile, cwd=snapshot.source, environment=environment, runner=runner),
@@ -684,9 +615,218 @@ def _revalidate_before_finalize(
         _write_process_evidence(attempt, f"post-build-tool-{role}", result)
     if reverified_tools.observations != expected_tools.observations:
         raise CMakeBuildError("build tool observations changed during the build")
+    # A rehydrate skips re-hashing the freshly captured artifacts here because
+    # cache.publish immediately reverifies the rebuilt root against the retained
+    # canonical evidence (a strictly stronger check); a fresh build has no
+    # canonical record yet, so it must verify its own captured artifacts.
+    if verify_artifacts:
+        verify_artifact_capture(
+            root,
+            expected_artifacts,
+            selections=selections_from_cache(profile, cache),
+            toolchain_mode=profile.toolchain.mode,
+        )
     verify_snapshot(snapshot.root)
     preparation.verify()
-    _verify_build_root_owner(root, owner)
+    verify_build_root_owner(root, owner)
+
+
+_DIFF_EVIDENCE_PATH = "source/diff.patch"
+_PATCH_EVIDENCE_DIR = "source/patches"
+_SOURCE_BLOB_LIMIT = 64 * 1024 * 1024
+_SOURCE_BLOB_AGGREGATE = 128 * 1024 * 1024
+
+
+def _json_normalized(value: Any) -> dict[str, Any]:
+    """Round-trip a model dump through canonical JSON so tuples become lists.
+
+    Fresh and reloaded reproducer blobs must compare equal, which fails if one
+    still holds tuples where the persisted form holds JSON arrays.
+    """
+
+    normalized = json.loads(canonical_json_bytes(value))
+    if not isinstance(normalized, dict):
+        raise CMakeBuildError("source reproducer evidence is not a JSON object")
+    return normalized
+
+
+def _source_reproducer(evidence: SourceEvidence, snapshot: SourceSnapshot) -> SourceReproducerV1:
+    """Build the portable, content-addressed reproducer for one leased source."""
+
+    evidence_dict = _json_normalized(evidence.model_dump(mode="json"))
+    diff: SourceBlobRefV1 | None = None
+    if evidence.diff_size_bytes > 0:
+        diff = SourceBlobRefV1(
+            relative_path=_DIFF_EVIDENCE_PATH,
+            sha256=evidence.diff_sha256,
+            size_bytes=evidence.diff_size_bytes,
+        )
+    patches = tuple(
+        SourcePatchRefV1(
+            order=patch.order,
+            relative_path=f"{_PATCH_EVIDENCE_DIR}/{patch.order:04d}.patch",
+            sha256=patch.sha256,
+            size_bytes=patch.size_bytes,
+        )
+        for patch in evidence.patches
+    )
+    return SourceReproducerV1(
+        candidate_id=evidence.candidate_id,
+        content_tree_id=evidence.content_tree_id,
+        snapshot_id=snapshot.snapshot_id,
+        source_evidence=evidence_dict,
+        source_evidence_sha256=hashlib.sha256(canonical_json_bytes(evidence_dict)).hexdigest(),
+        snapshot_manifest=_json_normalized(snapshot.manifest.model_dump(mode="json")),
+        diff=diff,
+        patches=patches,
+    )
+
+
+def _write_artifacts_evidence(attempt: BuildAttemptSession, artifacts: BuildArtifactsV1) -> bytes:
+    """Serialize the artifact set once, write ``build/artifacts.json``, return bytes.
+
+    The returned canonical bytes are reused for the provenance inventory digest so
+    the fresh-build path never serializes the same artifact set twice.
+    """
+
+    artifacts_bytes = canonical_json_bytes(artifacts.model_dump(mode="json"))
+    attempt.write_evidence("build/artifacts.json", artifacts_bytes)
+    return artifacts_bytes
+
+
+def _producer_provenance(
+    *,
+    build_id: str,
+    producer_attempt_id: str,
+    recipe: str,
+    source: SourceReproducerV1,
+    artifacts: BuildArtifactsV1,
+    attempt: BuildAttemptSession,
+) -> ProducerProvenanceV1:
+    """Bind the producer attempt to its build with a complete digest-indexed
+    inventory of the durable evidence it has written.
+
+    The inventory is the attempt's accumulated ``write_evidence`` manifest — digest
+    and size captured from the exact bytes at write time — so no pre-publication
+    disk re-read/hash is needed. It covers the artifacts, profile, environment,
+    source evidence/snapshot/reproducer bytes, configure caches, compile database,
+    File API replies, and tool/process observations (every required item and source
+    blob); provenance.json/result.json are written later and so are naturally absent.
+    The immutable ``publish_record`` remains the independent on-disk copy/hash
+    boundary, and a later tamper still fails through record verification.
+    """
+
+    evidence = tuple(
+        EvidenceRefV1(relative_path=path, sha256=digest, size_bytes=size)
+        for path, digest, size in attempt.evidence_manifest()
+    )
+
+    return ProducerProvenanceV1(
+        build_id=build_id,
+        producer_attempt_id=producer_attempt_id,
+        recipe_id=recipe,
+        artifact_set_id=artifacts.artifact_set_id,
+        candidate_id=source.candidate_id,
+        snapshot_id=source.snapshot_id,
+        execution_class="built",
+        evidence=evidence,
+    )
+
+
+def _build_identity(
+    *,
+    recipe: str,
+    profile: BuildProfileV1,
+    environment: tuple[IdentityEntryV1, ...],
+    selections: tuple[IdentityEntry, ...],
+    tools: tuple[ToolObservation, ...],
+    source: SourceReproducerV1,
+) -> BuildIdentityProjectionV1:
+    """Assemble the reproducible identity every invocation of one build must match."""
+
+    return BuildIdentityProjectionV1(
+        recipe_id=recipe,
+        profile_sha256=hashlib.sha256(
+            canonical_json_bytes(profile.model_dump(mode="json"))
+        ).hexdigest(),
+        toolchain_mode=profile.toolchain.mode,
+        environment=environment,
+        requested_targets=tuple(sorted(profile.targets)),
+        selections=identity_models(selections),
+        tools=tool_models(tools),
+        source=source,
+    )
+
+
+def _canonical_from_identity(
+    identity: BuildIdentityProjectionV1,
+    *,
+    build_id: str,
+    producer_attempt_id: str,
+    artifacts: BuildArtifactsV1,
+) -> CanonicalBuildRecordV1:
+    """Bind one producer attempt and its artifacts to a reproducible identity."""
+
+    # Carry every projection field forward from ``identity`` via the shared model
+    # machinery so a new projection field cannot be dropped from the canonical record.
+    projection = {name: getattr(identity, name) for name in BuildIdentityProjectionV1.model_fields}
+    return CanonicalBuildRecordV1(
+        **projection,
+        build_id=build_id,
+        producer_attempt_id=producer_attempt_id,
+        artifacts=artifacts,
+    )
+
+
+def _read_source_blob(path: Path, sha256: str, size_bytes: int) -> bytes:
+    """Read a verified diff/patch blob nofollow, failing closed on any drift."""
+
+    if size_bytes > _SOURCE_BLOB_LIMIT:
+        raise CMakeBuildError("source reproducer blob exceeds the size limit")
+    try:
+        descriptor = os.open(path, readonly_open_flags())
+    except OSError as exc:
+        raise CMakeBuildError("source reproducer blob is unavailable") from exc
+    content = bytearray()
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_size != size_bytes
+        ):
+            raise CMakeBuildError("source reproducer blob is not a trusted regular file")
+        while chunk := os.read(descriptor, 64 * 1024):
+            content.extend(chunk)
+            if len(content) > size_bytes:
+                raise CMakeBuildError("source reproducer blob grew while reading")
+    finally:
+        os.close(descriptor)
+    if len(content) != size_bytes or hashlib.sha256(content).hexdigest() != sha256:
+        raise CMakeBuildError("source reproducer blob digest changed")
+    return bytes(content)
+
+
+def _copy_source_reproducer_bytes(
+    attempt: BuildAttemptSession, preparation: SourceLease, reproducer: SourceReproducerV1
+) -> None:
+    """Copy the verified raw diff/patch bytes into immutable attempt evidence."""
+
+    evidence = preparation.evidence
+    record = preparation.record
+    total = 0
+    if reproducer.diff is not None:
+        data = _read_source_blob(
+            record / evidence.diff_file, reproducer.diff.sha256, reproducer.diff.size_bytes
+        )
+        total += len(data)
+        attempt.write_evidence(reproducer.diff.relative_path, data)
+    for patch, ref in zip(evidence.patches, reproducer.patches, strict=True):
+        data = _read_source_blob(record / patch.record_file, ref.sha256, ref.size_bytes)
+        total += len(data)
+        if total > _SOURCE_BLOB_AGGREGATE:
+            raise CMakeBuildError("source reproducer bytes exceed the aggregate limit")
+        attempt.write_evidence(ref.relative_path, data)
 
 
 @contextlib.contextmanager
@@ -720,7 +860,10 @@ def _execute_leased_build(
     recipe = compute_recipe_id(evidence.candidate_id, evidence.adapter, profile)
     with _build_lifecycle(preparation, recipe, home=home) as (attempt, snapshot):
         final_root: Path | None = None
-        root_owner: _BuildRootOwnerV1 | None = None
+        root_owner: BuildRootOwnerV1 | None = None
+        artifact_evidence: BuildArtifactsV1 | None = None
+        execution_class: Literal["built", "cache-hit", "rehydrated", "recovered"] = "built"
+        canonical_record_sha256 = ""
         finalize_started = False
         try:
             attempt.mark_active()
@@ -777,66 +920,200 @@ def _execute_leased_build(
                 selections=probe_selections,
             )
             candidate_root = attempt.build_root(machine_build_id)
-            _prepare_build_root(materialized, candidate_root)
-            final_root = candidate_root
-            root_owner = _write_build_root_owner(
-                final_root, attempt.registry.attempt_id, machine_build_id
-            )
-            final_cache_bytes = _run_configure(
-                profile,
-                source=snapshot.source,
-                source_version=source_version,
-                build=final_root,
-                environment=environment,
-                attempt=attempt,
-                label="final-configure",
-                runner=runner,
-            )
-            final_cache = parse_cmake_cache(final_cache_bytes)
-            _verify_source_version(final_cache, source_version)
-            final_selections = selections_from_cache(profile, final_cache)
-            if final_selections != probe_selections:
-                raise CMakeBuildError("final CMake selections drifted from the probe")
-            build_result = runner(
-                (
-                    profile.toolchain.cmake,
-                    "--build",
-                    str(final_root),
-                    "--target",
-                    *sorted(profile.targets),
-                    "--parallel",
-                    str(profile.execution.jobs),
+            identity = _build_identity(
+                recipe=recipe,
+                profile=profile,
+                environment=cache_environment_projection(
+                    environment,
+                    home=home,
+                    source_root=snapshot.source,
+                    build_root=candidate_root,
+                    build_home=attempt.root / "private" / "home",
+                    build_tmp=attempt.root / "private" / "tmp",
                 ),
-                cwd=final_root,
-                timeout=profile.execution.timeouts.build_seconds,
-                inherit_env=False,
-                base_env=environment,
-                output_limit_bytes=_VERSION_LIMIT,
-                stdout_spool=attempt.root / "logs" / "build.stdout",
-                stderr_spool=attempt.root / "logs" / "build.stderr",
-                spool_root=attempt.root,
+                selections=probe_selections,
+                tools=tools.observations,
+                source=_source_reproducer(evidence, snapshot),
             )
-            _write_process_evidence(attempt, "build", build_result)
-            _require_success(build_result, "CMake build")
-            assert final_root is not None and root_owner is not None
-            _revalidate_before_finalize(
-                preparation,
-                profile,
-                cache=final_cache,
-                snapshot=snapshot,
-                root=final_root,
-                owner=root_owner,
-                expected_tools=tools,
-                environment=environment,
-                attempt=attempt,
-                runner=runner,
-            )
+            with build_cache_session(
+                machine_build_id, attempt.registry.attempt_id, home=home
+            ) as cache:
+                lookup = cache.lookup(identity, home=home)
+                if lookup.classification is CacheClassification.HIT:
+                    assert lookup.canonical is not None
+                    assert lookup.canonical_record_sha256 is not None
+                    assert lookup.owner is not None
+                    final_root = cache.root
+                    final_selections = probe_selections
+                    artifact_evidence = lookup.canonical.artifacts
+                    # An un-attested HIT is a crash-forward completion (PRESENT root
+                    # verified, but its producer never finalized SUCCESS). This
+                    # attempt genuinely re-verifies the root below and finalizes as
+                    # the recovery attestor, publishing the missing attestation
+                    # before the recovered cache is treated as reusable.
+                    execution_class = "recovered" if lookup.needs_attestation else "cache-hit"
+                    canonical_record_sha256 = lookup.canonical_record_sha256
+                    _write_artifacts_evidence(attempt, artifact_evidence)
+                    # A cache hit reuses the materialized root without rebuilding,
+                    # so reverify the whole boundary immediately before success:
+                    # source lease, snapshot, current tools, the retained canonical
+                    # artifacts, and the exact journal-authenticated owner binding
+                    # (attempt/build/uid/dev/inode) returned by lookup.
+                    _revalidate_before_finalize(
+                        preparation,
+                        profile,
+                        cache=probe_cache,
+                        snapshot=snapshot,
+                        root=final_root,
+                        owner=lookup.owner,
+                        expected_tools=tools,
+                        expected_artifacts=artifact_evidence,
+                        environment=environment,
+                        attempt=attempt,
+                        runner=runner,
+                    )
+                else:
+                    rehydrate = lookup.classification is CacheClassification.REHYDRATE
+                    cache.begin_materialization(rehydrate=rehydrate)
+                    try:
+                        _prepare_build_root(materialized, candidate_root)
+                        final_root = candidate_root
+                        root_owner = write_build_root_owner(
+                            final_root, attempt.registry.attempt_id, machine_build_id
+                        )
+                        cache.bind_root(root_owner)
+                        prepare_file_api_query(final_root)
+                        final_cache_bytes = _run_configure(
+                            profile,
+                            source=snapshot.source,
+                            source_version=source_version,
+                            build=final_root,
+                            environment=environment,
+                            attempt=attempt,
+                            label="final-configure",
+                            runner=runner,
+                        )
+                        final_cache = parse_cmake_cache(final_cache_bytes)
+                        _verify_source_version(final_cache, source_version)
+                        final_selections = selections_from_cache(profile, final_cache)
+                        if final_selections != probe_selections:
+                            raise CMakeBuildError("final CMake selections drifted from the probe")
+                        build_result = runner(
+                            (
+                                profile.toolchain.cmake,
+                                "--build",
+                                str(final_root),
+                                "--target",
+                                *sorted(profile.targets),
+                                "--parallel",
+                                str(profile.execution.jobs),
+                            ),
+                            cwd=final_root,
+                            timeout=profile.execution.timeouts.build_seconds,
+                            inherit_env=False,
+                            base_env=environment,
+                            output_limit_bytes=_VERSION_LIMIT,
+                            stdout_spool=attempt.root / "logs" / "build.stdout",
+                            stderr_spool=attempt.root / "logs" / "build.stderr",
+                            spool_root=attempt.root,
+                        )
+                        _write_process_evidence(attempt, "build", build_result)
+                        _require_success(build_result, "CMake build")
+                        artifact_capture = capture_build_artifacts(
+                            final_root,
+                            build_type=profile.build_type,
+                            requested_targets=tuple(sorted(profile.targets)),
+                            selections=final_selections,
+                            toolchain_mode=profile.toolchain.mode,
+                            environment=environment,
+                            discovery_timeout=profile.execution.timeouts.discovery_seconds,
+                            capability_timeout=profile.execution.timeouts.capability_seconds,
+                            inspection_timeout=profile.execution.timeouts.inspection_seconds,
+                            process_root=attempt.root,
+                            runner=runner,
+                        )
+                        artifact_evidence = artifact_capture.evidence
+                        _write_artifacts_evidence(attempt, artifact_evidence)
+                        for reply in artifact_capture.raw_replies:
+                            attempt.write_evidence(f"cmake/file-api/{reply.name}", reply.content)
+                        if artifact_capture.compile_commands is not None:
+                            attempt.write_evidence(
+                                "cmake/compile_commands.json", artifact_capture.compile_commands
+                            )
+                        else:
+                            attempt.write_evidence(
+                                "cmake/compile_commands.absent.json",
+                                canonical_json_bytes({"absent": True, "schema_version": 1}),
+                            )
+                        for name, result in artifact_capture.process_results:
+                            _write_process_evidence(attempt, name, result)
+                        _revalidate_before_finalize(
+                            preparation,
+                            profile,
+                            cache=final_cache,
+                            snapshot=snapshot,
+                            root=final_root,
+                            owner=root_owner,
+                            expected_tools=tools,
+                            expected_artifacts=artifact_evidence,
+                            environment=environment,
+                            attempt=attempt,
+                            runner=runner,
+                            verify_artifacts=not rehydrate,
+                        )
+                        if rehydrate and lookup.canonical is not None:
+                            producer_attempt_id = lookup.canonical.producer_attempt_id
+                        else:
+                            producer_attempt_id = attempt.registry.attempt_id
+                            _copy_source_reproducer_bytes(attempt, preparation, identity.source)
+                            # Bind this producer attempt to the build identity in its
+                            # own immutable evidence *before* the canonical record is
+                            # published, so inspection can authenticate provenance
+                            # without a lock-order inversion or a circular digest. The
+                            # inventory covers the File API, artifact, and source
+                            # evidence written just above.
+                            provenance = _producer_provenance(
+                                build_id=machine_build_id,
+                                producer_attempt_id=producer_attempt_id,
+                                recipe=recipe,
+                                source=identity.source,
+                                artifacts=artifact_evidence,
+                                attempt=attempt,
+                            )
+                            attempt.write_evidence(
+                                "build/provenance.json",
+                                canonical_json_bytes(provenance.model_dump(mode="json")),
+                            )
+                        record = _canonical_from_identity(
+                            identity,
+                            build_id=machine_build_id,
+                            producer_attempt_id=producer_attempt_id,
+                            artifacts=artifact_evidence,
+                        )
+                        # Durably flush the fully validated tree before publication so a
+                        # crash after PUBLISHING can only recover a persisted build root.
+                        fsync_tree(final_root)
+                    except BaseException:
+                        # Failures up to and including artifact capture leave the
+                        # journal in BUILDING/REHYDRATING; discard the uncommitted
+                        # root now so the next lookup recovers cleanly.
+                        with contextlib.suppress(CMakeBuildError, BuildCacheError, OSError):
+                            remove_owned_build_root(final_root, root_owner)
+                        raise
+                    # Once publication begins the journal advances to PUBLISHING with
+                    # authenticated staging; a failure here is completed forward by
+                    # recovery, never by discarding the materialized root.
+                    canonical_record_sha256 = cache.publish(record, rehydrate=rehydrate)
+                    execution_class = "rehydrated" if rehydrate else "built"
             attempt.write_evidence(
                 "build/result.json",
                 canonical_json_bytes(
                     {
+                        "artifact_set_id": artifact_evidence.artifact_set_id,
                         "build_id": machine_build_id,
                         "build_root": str(final_root),
+                        "canonical_record_sha256": canonical_record_sha256,
+                        "execution_class": execution_class,
                         "recipe_id": recipe,
                         "schema_version": 1,
                         "selections": [asdict(value) for value in final_selections],
@@ -847,13 +1124,27 @@ def _execute_leased_build(
             )
             finalize_started = True
             finalized = attempt.finalize(AttemptOutcome.SUCCESS, build_id=machine_build_id)
+            # Post-finalization attestation boundary. This finalized SUCCESS record
+            # binds the canonical digest, so publish the immutable attestation that
+            # first makes a canonical reusable as a cache HIT: "built" when this
+            # attempt produced it, "recovered" when this attempt completed a
+            # crash-forward one whose producer never attested. A "rehydrated" run
+            # reuses a canonical that was already attested when first completed, and
+            # a "cache-hit" reused an already-attested build; neither publishes.
+            if execution_class == "built" or execution_class == "recovered":
+                publish_build_attestation(
+                    machine_build_id,
+                    attestor_attempt_id=finalized.attempt_id,
+                    canonical_record_sha256=canonical_record_sha256,
+                    execution_class=execution_class,
+                    artifact_set_id=artifact_evidence.artifact_set_id,
+                    home=home,
+                )
         except BaseException:
             if not finalize_started:
                 _record_failure_evidence(attempt)
-                with contextlib.suppress(CMakeBuildError, OSError):
-                    _remove_failed_build_root(final_root, root_owner)
             raise
-    assert final_root is not None
+    assert final_root is not None and artifact_evidence is not None
     return CMakeBuildResult(
         recipe,
         machine_build_id,
@@ -861,6 +1152,9 @@ def _execute_leased_build(
         final_root,
         final_selections,
         tools.observations,
+        artifact_evidence,
+        execution_class,
+        canonical_record_sha256,
         finalized,
     )
 

@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import os
 import re
 import secrets
 import shutil
 import stat
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -18,8 +19,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from strixlab.build_identity import attempt_id
+from strixlab.build_paths import build_storage_roots, is_unsafe_directory, prepare_storage_tree
 from strixlab.build_records import (
     BuildRecordError,
+    RecordFileV1,
     RecordVerification,
     publish_record,
     record_source_digest,
@@ -143,6 +146,11 @@ class BuildAttemptSession:
     registry: AttemptRegistryV1
     _finalized: bool = False
     result: AttemptResult | None = None
+    # Authenticated record-relative path -> (sha256, size) accumulated from the exact
+    # bytes written via write_evidence, so a producer inventory needs no pre-publication
+    # disk re-read/hash. The immutable publish_record remains the independent on-disk
+    # copy/hash boundary that a later tamper still fails through.
+    _evidence: dict[str, tuple[str, int]] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -167,7 +175,20 @@ class BuildAttemptSession:
 
     def write_evidence(self, relative: str, content: bytes) -> Path:
         path = _safe_attempt_relative(relative)
-        return _write_attempt_file(self.root, path, content)
+        written = _write_attempt_file(self.root, path, content)
+        # Record digest/size from the exact bytes just written (same content-address
+        # publish_record recomputes on disk), so producer provenance is built without
+        # re-reading the tree.
+        self._evidence[path.as_posix()] = (hashlib.sha256(content).hexdigest(), len(content))
+        return written
+
+    def evidence_manifest(self) -> tuple[tuple[str, str, int], ...]:
+        """Sorted ``(record-relative path, sha256, size)`` for every evidence file
+        written so far via :meth:`write_evidence`, for the producer inventory."""
+
+        return tuple(
+            (path, digest, size) for path, (digest, size) in sorted(self._evidence.items())
+        )
 
     def mark_active(self) -> None:
         self.registry = _transition(self.root, self.registry, AttemptState.ACTIVE)
@@ -212,58 +233,33 @@ def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def _ensure_directory(path: Path) -> None:
+def _validate_directory(path: Path) -> None:
     try:
         metadata = path.lstat()
-    except FileNotFoundError:
-        path.mkdir(mode=0o700)
-        return
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISDIR(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-    ):
+    except FileNotFoundError as exc:
+        raise BuildStateError("StrixLab build state does not exist") from exc
+    if is_unsafe_directory(metadata):
         raise BuildStateError(f"build state path is unsafe: {path}")
 
 
 def _layout(home: Path, *, create: bool) -> _BuildLayout:
-    if not home.is_absolute():
-        raise ValueError("StrixLab home must be absolute")
+    roots = build_storage_roots(home)
+    # Preserve the specific home-symlink message before the shared procedure runs.
     if home.exists() and home.is_symlink():
         raise BuildStateError("StrixLab home cannot be a symbolic link")
-    if create and not home.exists():
-        home.mkdir(mode=0o700, parents=True)
-    root = home / "builds"
     layout = _BuildLayout(
-        home=home,
-        root=root,
-        attempts=root / "attempts",
-        attempt_records=root / "records" / "attempts",
-        success_records=root / "records" / "success",
-        materialized=root / "materialized",
-        snapshots=root / "snapshots",
-        recipe_indexes=root / "indexes" / "recipes",
-        build_indexes=root / "indexes" / "builds",
-        locks=home / "locks",
+        home=roots.home,
+        root=roots.root,
+        attempts=roots.attempts,
+        attempt_records=roots.attempt_records,
+        success_records=roots.success_records,
+        materialized=roots.materialized,
+        snapshots=roots.snapshots,
+        recipe_indexes=roots.recipe_indexes,
+        build_indexes=roots.build_indexes,
+        locks=roots.locks,
     )
-    paths = (
-        layout.home,
-        layout.root,
-        layout.attempts,
-        layout.root / "records",
-        layout.attempt_records,
-        layout.success_records,
-        layout.materialized,
-        layout.snapshots,
-        layout.root / "indexes",
-        layout.recipe_indexes,
-        layout.build_indexes,
-        layout.locks,
-    )
-    if not create and any(not path.exists() for path in paths):
-        raise BuildStateError("StrixLab build state does not exist")
-    for path in paths:
-        _ensure_directory(path)
+    prepare_storage_tree(roots, create=create, validate=_validate_directory)
     return layout
 
 
@@ -642,6 +638,41 @@ def _assert_finalized_record_binding(
     _validate_event_chain(root, registry)
 
 
+def _verify_finalized_record(
+    record: Path,
+    *,
+    expected_record_sha256: str | None,
+    recipe_id: str,
+    attempt_identifier: str,
+    outcome: AttemptOutcome,
+    build_id: str | None,
+    verify_error: str,
+    digest_error: str,
+) -> AttemptRegistryV1:
+    """Verify a terminal record's digest against its index and finalized binding.
+
+    The content-addressed digest is authenticated before the registry model is
+    parsed, so a tampered ``current.json`` fails with the caller's ``digest_error``
+    rather than a parse error. Callers keep their distinct ``verify_error`` /
+    ``digest_error`` surfaces; the binding failure surface is shared.
+    """
+
+    verification = _verify_record(record, error=verify_error)
+    if verification.record_sha256 != expected_record_sha256:
+        raise BuildStateError(digest_error)
+    registry = _read_model(record / "current.json", AttemptRegistryV1)
+    _assert_finalized_record_binding(
+        record,
+        registry,
+        recipe_id=recipe_id,
+        attempt_identifier=attempt_identifier,
+        outcome=outcome,
+        build_id=build_id,
+        error="attempt record is not bound to its recipe index",
+    )
+    return registry
+
+
 def _remove_preallocation_orphans(layout: _BuildLayout) -> None:
     """Remove only allocator-shaped roots while the global allocation lock is held."""
 
@@ -973,23 +1004,17 @@ def _inspect_recipe_locked(recipe_id: str, layout: _BuildLayout) -> RecipeIndexV
         if entry.state is not AttemptState.TORN_DOWN:
             raise BuildStateError("finalized attempt index has incomplete teardown state")
         record = layout.attempt_records / entry.attempt_id
-        verification = _verify_record(record, error="attempt record digest verification failed")
-        if verification.record_sha256 != entry.record_sha256:
-            raise BuildStateError("attempt record digest does not match recipe index")
-        registry = _read_model(
-            record / "current.json",
-            AttemptRegistryV1,
-        )
         if entry.outcome is None:
             raise BuildStateError("finalized attempt index has no outcome")
-        _assert_finalized_record_binding(
+        _verify_finalized_record(
             record,
-            registry,
+            expected_record_sha256=entry.record_sha256,
             recipe_id=recipe_id,
             attempt_identifier=entry.attempt_id,
             outcome=entry.outcome,
             build_id=entry.build_id,
-            error="attempt record is not bound to its recipe index",
+            verify_error="attempt record digest verification failed",
+            digest_error="attempt record digest does not match recipe index",
         )
     return index
 
@@ -1005,3 +1030,123 @@ def inspect_recipe(recipe_id: str, *, home: Path) -> RecipeIndexV1:
         if not lock.acquired:
             raise BuildBusyError(lock.reason or "build recipe lock is unavailable")
         return _inspect_recipe_locked(recipe_id, layout)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedAttemptRecord:
+    """One authenticated immutable attempt record, its manifest, and its digest.
+
+    ``files`` is the record verifier's already-authenticated relative-path →
+    mode/size/sha256 manifest, so a caller can validate declared evidence against
+    it without re-hashing the record. ``record_sha256`` is the exact content-address
+    of the immutable record, so a caller can bind it to an external digest anchor and
+    reject a self-consistent replacement record.
+    """
+
+    path: Path
+    registry: AttemptRegistryV1
+    files: tuple[RecordFileV1, ...]
+    record_sha256: str
+
+
+def verify_attempt_record(attempt_identifier: str, *, home: Path) -> VerifiedAttemptRecord:
+    """Authenticate one immutable attempt record, returning its dir, registry,
+    authenticated file manifest, and exact record digest.
+
+    Lock-free by design: the attempt record is content-addressed and immutable
+    once published, so a build-ID-locked caller can verify producer provenance
+    without acquiring the recipe lock (which would invert the recipe→build-ID
+    lock order the build lifecycle uses).
+    """
+
+    if _ATTEMPT_RE.fullmatch(attempt_identifier) is None:
+        raise ValueError("invalid build attempt ID")
+    layout = _layout(home, create=False)
+    record = layout.attempt_records / attempt_identifier
+    if not record.is_dir():
+        raise BuildStateError("producer attempt record is missing")
+    verification = _verify_record(record, error="producer attempt record verification failed")
+    recorded = _read_model(record / "current.json", AttemptRegistryV1)
+    _validate_attempt_identity(recorded)
+    if recorded.attempt_id != attempt_identifier:
+        raise BuildStateError("producer attempt record identity changed")
+    return VerifiedAttemptRecord(
+        path=record,
+        registry=recorded,
+        files=verification.files,
+        record_sha256=verification.record_sha256,
+    )
+
+
+def recipe_index_record_digest(recipe_id: str, attempt_id: str, *, home: Path) -> str:
+    """Return one attempt's authoritative terminal record digest from its recipe index.
+
+    This is the external digest boundary for a producer record: it is written under
+    the recipe lock by finalization, so a self-consistent replacement of the immutable
+    record (whose own content-address then differs) is caught by comparing against it.
+
+    The caller MUST already hold the recipe lock; this performs no lock acquisition,
+    so it is safe to call under a nested build-ID lock (e.g. during recovery
+    attestation) without inverting the recipe→build-ID lock order.
+    """
+
+    if _RECIPE_RE.fullmatch(recipe_id) is None:
+        raise ValueError("invalid recipe ID")
+    if _ATTEMPT_RE.fullmatch(attempt_id) is None:
+        raise ValueError("invalid build attempt ID")
+    layout = _layout(home, create=False)
+    index = _load_recipe_index(layout, recipe_id)
+    entry = next((item for item in index.attempts if item.attempt_id == attempt_id), None)
+    if entry is None or entry.state is not AttemptState.TORN_DOWN or entry.record_sha256 is None:
+        raise BuildStateError("attempt has no finalized recipe-index record digest")
+    return entry.record_sha256
+
+
+def inspect_attempt(attempt_identifier: str, *, home: Path) -> AttemptIndexEntryV1:
+    """Return one immutable terminal attempt record, refusing active attempts.
+
+    The immutable record stores the finalizing registry; the authoritative
+    outcome, build ID, and record digest live in the recipe index, so this
+    cross-checks the record against that index under the recipe lock.
+    """
+
+    if _ATTEMPT_RE.fullmatch(attempt_identifier) is None:
+        raise ValueError("invalid build attempt ID")
+    layout = _layout(home, create=False)
+    record = layout.attempt_records / attempt_identifier
+    if not record.is_dir():
+        if (layout.attempts / attempt_identifier).exists():
+            raise BuildStateError("active build attempt has no immutable terminal record")
+        raise BuildStateError("build attempt record does not exist")
+    recorded = _read_model(record / "current.json", AttemptRegistryV1)
+    _validate_attempt_identity(recorded)
+    if recorded.attempt_id != attempt_identifier:
+        raise BuildStateError("attempt record identity changed")
+    recipe_suffix = recorded.recipe_id.removeprefix("recipe-sha256:")
+    lock_path = layout.locks / f"build-recipe-{recipe_suffix}.lock"
+    with exclusive_lock(lock_path) as lock:
+        if not lock.acquired:
+            raise BuildBusyError(lock.reason or "build recipe lock is unavailable")
+        index = _load_recipe_index(layout, recorded.recipe_id)
+        entry = next(
+            (item for item in index.attempts if item.attempt_id == attempt_identifier), None
+        )
+        if entry is None:
+            raise BuildStateError("attempt is not indexed by its recipe")
+        if (
+            entry.state is not AttemptState.TORN_DOWN
+            or entry.record_sha256 is None
+            or entry.outcome is None
+        ):
+            raise BuildStateError("attempt record is not a terminal record")
+        _verify_finalized_record(
+            record,
+            expected_record_sha256=entry.record_sha256,
+            recipe_id=recorded.recipe_id,
+            attempt_identifier=attempt_identifier,
+            outcome=entry.outcome,
+            build_id=entry.build_id,
+            verify_error="attempt record verification failed",
+            digest_error="attempt record digest changed",
+        )
+        return entry
