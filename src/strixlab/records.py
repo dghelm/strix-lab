@@ -1,4 +1,4 @@
-"""Immutable build-record publication and content verification."""
+"""Immutable record publication and content verification."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MANIFEST_NAME = "record-manifest.json"
 
 
-class BuildRecordError(RuntimeError):
+class RecordError(RuntimeError):
     """An immutable build record is unsafe, corrupt, or divergent."""
 
 
@@ -66,7 +66,7 @@ def _safe_relative(value: str) -> PurePosixPath:
         or path.as_posix() != value
         or any(ord(character) < 32 or ord(character) == 127 for character in value)
     ):
-        raise BuildRecordError(f"unsafe record-relative path: {value!r}")
+        raise RecordError(f"unsafe record-relative path: {value!r}")
     return path
 
 
@@ -78,17 +78,27 @@ def _record_digest(manifest_bytes: bytes) -> str:
     return "record-sha256:" + hashlib.sha256(framed).hexdigest()
 
 
+def record_manifest_digest(manifest_bytes: bytes) -> str:
+    """Public record digest for canonical ``record-manifest.json`` bytes.
+
+    Narrowly reusable by run/bundle verification to re-derive and bind the immutable
+    record digest without re-copying the tree.
+    """
+
+    return _record_digest(manifest_bytes)
+
+
 def _owned_directory(path: Path) -> os.stat_result:
     try:
         metadata = path.lstat()
     except FileNotFoundError as exc:
-        raise BuildRecordError(f"record directory is missing: {path}") from exc
+        raise RecordError(f"record directory is missing: {path}") from exc
     if (
         stat.S_ISLNK(metadata.st_mode)
         or not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid != os.geteuid()
     ):
-        raise BuildRecordError(f"record directory is unsafe: {path}")
+        raise RecordError(f"record directory is unsafe: {path}")
     return metadata
 
 
@@ -99,11 +109,11 @@ def _open_owned_regular(path: Path) -> tuple[int, os.stat_result]:
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
-        raise BuildRecordError(f"record input is unavailable: {path}") from exc
+        raise RecordError(f"record input is unavailable: {path}") from exc
     metadata = os.fstat(descriptor)
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
         os.close(descriptor)
-        raise BuildRecordError(f"record input is not an owned regular file: {path}")
+        raise RecordError(f"record input is not an owned regular file: {path}")
     return descriptor, metadata
 
 
@@ -130,7 +140,7 @@ def _copy_regular(source: Path, destination: Path, relative: str) -> RecordFileV
             or after.st_size != before.st_size
             or size != before.st_size
         ):
-            raise BuildRecordError(f"record input changed while copying: {source}")
+            raise RecordError(f"record input changed while copying: {source}")
         os.fchmod(output, stat.S_IMODE(before.st_mode))
         os.fsync(output)
     finally:
@@ -156,7 +166,7 @@ def _walk_owned_tree(root: Path) -> tuple[tuple[str, Path], ...]:
             child = current / name
             metadata = child.lstat()
             if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-                raise BuildRecordError(f"record tree contains an unsafe directory: {child}")
+                raise RecordError(f"record tree contains an unsafe directory: {child}")
         for name in files:
             child = current / name
             relative = child.relative_to(root).as_posix()
@@ -205,7 +215,7 @@ def record_source_digest(source: Path) -> str:
 
     files = hash_owned_tree(source)
     if any(entry.path == _MANIFEST_NAME for entry in files):
-        raise BuildRecordError("record input cannot supply record-manifest.json")
+        raise RecordError("record input cannot supply record-manifest.json")
     manifest = RecordManifestV1(files=files)
     return _record_digest(canonical_json_bytes(manifest.model_dump(mode="json")))
 
@@ -220,7 +230,7 @@ def publish_record(source: Path, destination: Path) -> RecordVerification:
         stage.mkdir(mode=0o700)
         source_files = _walk_owned_tree(source)
         if any(relative == _MANIFEST_NAME for relative, _path in source_files):
-            raise BuildRecordError("record input cannot supply record-manifest.json")
+            raise RecordError("record input cannot supply record-manifest.json")
         files = tuple(
             _copy_regular(path, stage / PurePosixPath(relative), relative)
             for relative, path in source_files
@@ -245,7 +255,7 @@ def _read_regular(path: Path) -> tuple[bytes, os.stat_result]:
             chunks.append(chunk)
         after = os.fstat(descriptor)
         if before.st_dev != after.st_dev or before.st_ino != after.st_ino:
-            raise BuildRecordError(f"record file changed while reading: {path}")
+            raise RecordError(f"record file changed while reading: {path}")
     finally:
         os.close(descriptor)
     return b"".join(chunks), before
@@ -266,7 +276,7 @@ def _hash_regular(path: Path) -> tuple[int, str, os.stat_result]:
             or before.st_size != after.st_size
             or size != before.st_size
         ):
-            raise BuildRecordError(f"record file changed while hashing: {path}")
+            raise RecordError(f"record file changed while hashing: {path}")
     finally:
         os.close(descriptor)
     return size, digest.hexdigest(), before
@@ -280,15 +290,15 @@ def verify_record(path: Path) -> RecordVerification:
     try:
         manifest = RecordManifestV1.model_validate_json(manifest_bytes)
     except ValueError as exc:
-        raise BuildRecordError("record manifest is invalid") from exc
+        raise RecordError("record manifest is invalid") from exc
     expected = {entry.path: entry for entry in manifest.files}
     if len(expected) != len(manifest.files):
-        raise BuildRecordError("record manifest contains duplicate paths")
+        raise RecordError("record manifest contains duplicate paths")
     actual_paths = {
         relative for relative, _child in _walk_owned_tree(path) if relative != _MANIFEST_NAME
     }
     if actual_paths != set(expected):
-        raise BuildRecordError("record payload set does not match its manifest")
+        raise RecordError("record payload set does not match its manifest")
     for relative, entry in expected.items():
         size, digest, metadata = _hash_regular(path / _safe_relative(relative))
         if (
@@ -296,7 +306,7 @@ def verify_record(path: Path) -> RecordVerification:
             or size != entry.size_bytes
             or digest != entry.sha256
         ):
-            raise BuildRecordError(f"record payload integrity mismatch: {relative}")
+            raise RecordError(f"record payload integrity mismatch: {relative}")
     return RecordVerification(
         path=path,
         record_sha256=_record_digest(manifest_bytes),

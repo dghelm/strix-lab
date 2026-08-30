@@ -1,6 +1,8 @@
 # StrixLab foundation design
 
-The implemented BASE-000 machine-readiness contract is specified in [Machine doctor](doctor.md). It deliberately stops before immutable evidence bundles (`EVIDENCE-001`).
+The implemented BASE-000 machine-readiness contract is specified in
+[Machine doctor](doctor.md). It deliberately stops before immutable evidence
+bundles (`EVIDENCE-001`).
 
 This document is the tracked authority for decisions adopted into StrixLab. It
 intentionally replaces the private implementation handoff as repository-facing
@@ -23,6 +25,23 @@ documentation; the handoff remains ignored reference material.
 8. Imported challenge and candidate artifacts are data. Parsing is pure;
    environment resolution is an explicit trusted operation followed by full
    validation of the resolved result.
+
+### Local storage trust boundary
+
+StrixLab trusts the operating-system account that owns its private storage. Its
+filesystem defenses cover crashes, malformed or stale state, foreign ownership,
+symlinks, special files, path traversal, and cooperating StrixLab processes that
+honor the advisory locks. They also detect many unexpected inode changes and refuse
+divergent state.
+
+Version 1 does not claim isolation from a malicious process running concurrently as
+that same account. Such a process can already rewrite or rename files inside the
+account's `0o700` directories between any two POSIX system calls. Defending that
+boundary requires stronger isolation—such as a separate UID, mount namespace, or
+sandbox—not an indefinitely expanding collection of pathname race checks. The code
+therefore keeps security-sensitive reads and destructive traversal descriptor-
+anchored where practical, while treating the owning UID as part of the trusted
+computing base.
 
 ## Validation stages
 
@@ -230,6 +249,169 @@ only inspection value excluded from any comparison is the raw `ldd` process
 digest, and only from rehydrate equivalence, because it is attempt-variable (ASLR
 randomizes the load addresses in `ldd` output); every other captured field must
 match.
+
+## Run evidence v1
+
+A run is the first trustworthy, reusable evidence boundary layered above the build
+subsystem. It allocates a collision-safe identity, captures the raw and resolved
+manifests that scope it, records an append-only crash-recoverable state journal, and
+finalizes — on **success and on failure alike** — into an immutable, independently
+verifiable run record with canonical checksums. A run does not execute a model and
+defines no suite, model, or candidate semantics; those are later boundaries.
+
+Storage lives under `runs/` in the data home: `allocation-staging/` (per-attempt
+staging trees), `active/<run-id>/` (the live run), `records/<run-id>/` (the immutable
+finalized record), `indexes/<run-id>.json` (the terminal projection), and
+`locks/<run-id>.lock` (the per-run advisory lock). Bundle export instead stages
+beside its own destination. Storage preparation validates `home` first and then
+creates each directory descriptor-relative under its already-validated parent's held,
+no-follow descriptor, validating owner, type, and the documented `0o700` mode at each
+step — so a symlinked or foreign `home` or storage root is caught and never created
+through or beneath. Every entry fails closed on detected drift. As stated in the local
+storage trust boundary, this does not attempt to defeat the owning UID replacing a
+validated directory in the interval between system calls.
+
+A run ID is `run-<UTC-basic>-<experiment-dash-id>-<128-bit-random>` — an RFC-basic UTC
+timestamp, the validated experiment dash identifier (bounded to 64 bytes), and 32 lower
+hex characters of fresh randomness. Allocation stages a complete run tree (both manifests,
+the run descriptor, the first `ALLOCATED` event, and the status projection), fsyncs it,
+and renames it no-replace into `active/<run-id>`; a collision retries with a fresh ID up
+to a bounded number of attempts. An ID is considered taken if `active/`, `records/`, or
+`indexes/` already holds it, so a finalized run's identity is never reissued even though
+its `active/` tree has been torn down. The per-run lock is acquired non-blockingly and
+held for the whole session lifetime; a contended lock reports the run as busy rather than
+failing.
+
+State is `ALLOCATED → ACTIVE → TERMINAL`, with the only legal transitions `None→ALLOCATED`,
+`ALLOCATED→ACTIVE`, `ALLOCATED→TERMINAL`, and `ACTIVE→TERMINAL`. Each transition appends a
+length-framed event (digest domain `strixlab.run.event.v1`) chained by `previous_sha256` to
+its predecessor, then atomically rewrites the `status.json` projection. Event and status
+metadata legality is model-enforced everywhere the models are constructed or parsed: a terminal
+event or status carries an outcome (its reason stays optional), and a nonterminal one carries
+neither an outcome nor a reason. Committed-chain verification, orphan/temp adoption, and bundle
+verification all authenticate the chain through one shared validator, so recovery and export
+apply an identical linking, transition-legality, and status-projection predicate. Every
+adapter-driven
+write — local evidence, portable blobs and entries, events, and the status projection — is
+**descriptor-anchored**: the live run root is opened once no-follow, each parent component is
+opened or created relative to that held descriptor with `O_NOFOLLOW`, and the file is
+published by a fsynced writer temp renamed no-replace within the same directory descriptor, so
+an intermediate directory swapped for a symlink between operations cannot redirect the write.
+
+Recovery authenticates the `active/<run-id>` root at entry: it opens the root no-follow
+(rejecting a symlinked, special, or foreign directory), checks its device and inode against the
+descriptor's recorded staged-root identity, and requires both the descriptor and status
+projection to name the requested run. Subsequent operations repeat no-follow, ownership, and
+content bindings at their own boundaries; detected cross-run or inode divergence fails closed.
+Allocation-stage reclamation additionally runs under the stage's own per-run lock: a live
+allocator holds that lock for the whole of its staging (including the brief pre-descriptor
+empty-directory window), so a contended lock leaves the stage untouched instead of deleting it
+out from under the allocator. Bulk recovery — both the allocation-staging and active-run loops —
+skips only a *contended* lock; an unavailable or unsafe lock (a missing lock parent, or a
+foreign-owned, non-regular, or over-permissive lock file) fails closed rather than being treated
+as contention. Recovery then replays and authenticates the event chain and
+reconciles at most one writer temporary per journal directory, and it fails closed on every
+unexpected, malformed, symlinked, special, or foreign directory entry rather than filtering it
+out. An event or portable-entry writer
+temp is removed only after it is authenticated (owned, `0600`, non-symlink) and either matches
+the byte-identical committed record or parses and links as the *exact* next event/entry — for
+an uncommitted next entry, its sequence, closed role/media policy, logical-path uniqueness, and
+referenced blob digest/size are all revalidated first. A portable blob writer temp is removed
+only after its bytes hash to the digest embedded in its own writer-temp name. An unreferenced
+committed blob is removed only after its owned mode and content-address are reverified. All
+such removals are descriptor-relative. A session that exits its context without an explicit
+outcome is finalized `FAILURE`; `INTERRUPTED` is reserved for recovery of a dead
+nonterminal owner. An escaping exception finalizes `FAILURE` without masking the original
+error, and an exception whose text fails secret-safety scanning is finalized with a fixed
+neutral reason rather than leaking it.
+
+Finalization ordering is fixed and crash-forward at every step: before checksum generation,
+reconcile the run-root atomic-writer temps (a `status.json` or `checksums.sha256` temp left by a
+crash between its fsync and rename is removed under a strict namespace, and any other unexpected
+root writer temp fails closed) so a stray temp can never be hashed into the record; then generate
+and fsync `checksums.sha256`, publish the immutable record, publish the terminal index, then tear
+down the `active/` tree. A crash before any step is completed forward from the durable prior step
+on recovery — and when recovery *accepts* a record or index published by a prior crashed
+finalization, it fsyncs that entry's parent directory before teardown, so a crash between the
+prior rename and its parent fsync cannot leave the accepted copy non-durable while the only
+remaining active copy is deleted. Index rebuild and inspection share **one complete
+finalized-record verifier**:
+beyond the generic record check (which authenticates the exact file set and each file's digest
+against the record manifest), it binds the record's semantics — the descriptor and status must
+name this run and be terminal with an outcome, the captured manifest digests must match the
+bundled manifest bytes, the full committed event chain must authenticate and project exactly
+onto the status, and `checksums.sha256` must declare exactly the record payload set (minus
+itself) with digests matching the authenticated files — so a record whose manifest is
+self-consistent but whose semantics are corrupt fails closed. Teardown deletes the live tree
+descriptor-relative: it empties the authenticated inode through a held, no-follow descriptor
+(never re-resolving `active/<run-id>` by name) and removes the now-empty directory only after
+re-confirming the name still resolves to that same inode. POSIX has no `rmdir`-by-descriptor;
+under a malicious same-UID race the final name removal can target another empty directory, but
+recursive deletion never follows that replacement or removes its contents. Inspection re-derives
+and binds
+the record digest from the published manifest bytes without re-copying the tree, and binds the
+index to the fully verified record.
+
+`checksums.sha256` is the canonical `sha256␣␣path` inventory of every regular file in the
+record **except itself**, produced by the same `hash_owned_tree` primitive the build records
+use (no second hashing path to drift), sorted by the path's UTF-8 bytes with exactly one
+trailing newline. Verification re-hashes and rejects any missing, extra, or divergent entry.
+
+Evidence written during a run is either **complete-local** or **portable**. Complete-local
+evidence (`write_evidence`) is arbitrary owned run output that stays in the record and is
+never exported. Portable evidence (`write_portable`) is content-addressed under a closed v1
+policy: a bounded, ordered-unique set of roles (`environment`, `source`, `build`,
+`correctness`, `samples`, `profiler-summary`, `comparison`, `summary`) and media types
+(`application/json`, `application/x-ndjson`, `application/yaml`, `text/plain`, `text/csv`,
+`text/markdown`, `text/x-diff`), each entry naming a deduplicated blob by digest. Logical
+paths are validated run-relative and additionally rejected when they fall in the reserved
+control namespace (`run.json`, `status.json`, `events/`, `portable/`, the manifests,
+checksums, and record metadata): no backslash, absolute, `..`, control character, or
+over-255-UTF-8-byte path, and all payload and text bytes are secret-scanned, with both
+sensitive-interpolation and unsafe-output failures surfaced as a neutral run error. The v1
+numeric limits — at most 1024 portable entries, 16 MiB per member, 64 MiB aggregate payload,
+and 4096 total files — are enforced at write time over the deduplicated blob set, and again at
+bundle export and verification.
+
+A **bundle** is a deterministic, read-only directory export of exactly the portable surface
+of a finalized run — never the complete-local evidence. Export inspects the finalized run,
+collects the control files, the event chain, the portable entries, and only the blobs those
+entries reference, secret-scans the whole set against the caller's environment, validates the
+exact in-memory snapshot with the same binding logic `verify_bundle` applies, and only then
+publishes a staged directory no-replace — a concurrent record mutation between inspection and
+collection therefore fails closed before any destination exists. Both collection and
+verification read each member while its own directory descriptor is held (single-component
+`openat` with an `lstat`/`fstat` device+inode identity check), never re-resolving an
+intermediate component by pathname, so a same-uid rename between enumeration and read cannot
+redirect a read. The stage is a sibling under the destination's own parent (not under the data
+home), so a cross-filesystem destination still publishes by an atomic same-directory rename
+through a held parent descriptor; the destination parent is validated as an owned, non-symlink
+directory and an existing destination is refused. Staging is durable before publication: each
+member is written and fsynced, and every intermediate directory created under the stage
+(`run/`, `portable/`, `blobs/`, `entries/`, `events/`) has its parent fsynced when the directory
+entry is created, so a crash cannot leave a published bundle missing an intermediate directory
+whose file was already flushed. The verified stage's descriptor is held across the publishing
+rename and the published destination inode is checked against that stage identity. Detected
+divergence removes the destination and fails the export; the same-UID concurrency exclusion
+remains the local-storage trust boundary above. `verify_bundle` is a standalone read-only check:
+it enumerates and reads the whole tree in one descriptor-held traversal — accumulating member
+bytes as it goes and aborting before a member that would cross the 64 MiB aggregate bound is read
+into memory — requires the member set to match `bundle.json` exactly, re-hashes every member
+against its declared digest and size, and rejects any symlinked, executable, or undeclared
+member. Beyond bytes, it
+binds the bundle to its own control files:
+the embedded `record-manifest.json` must be canonical and digest-match the manifest's declared
+run-record digest; `run.json` and `status.json` must parse, agree on the run ID, and show a
+terminal status whose outcome equals the manifest outcome; the checksum declarations must
+cover exactly the record payload set minus `checksums.sha256` itself and agree with the record
+digests; the manifest-input and resolved-manifest digests in `run.json` must match
+their bundled bytes; and the complete, contiguous event chain must authenticate and
+project exactly to `status.json`, including its terminal outcome. Every portable entry
+filename must match its contiguous sequence and satisfy the closed role/media/path policy
+with a present, digest-named blob (no missing or extra blob), and all references to a
+deduplicated blob must agree on its media type. Because publication and verification are
+descriptor-anchored and no-follow, a destination parent or declared member replaced by a
+symlink fails closed as unavailable rather than being followed.
 
 ## Versioning and schemas
 

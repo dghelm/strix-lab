@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 import strixlab.builds as build_module
-from strixlab.build_records import publish_record
 from strixlab.builds import (
     AttemptOutcome,
     AttemptState,
@@ -18,6 +17,7 @@ from strixlab.builds import (
     begin_build_attempt,
     inspect_recipe,
 )
+from strixlab.records import publish_record
 
 _RECIPE = "recipe-sha256:" + "ab" * 32
 _OTHER_RECIPE = "recipe-sha256:" + "ef" * 32

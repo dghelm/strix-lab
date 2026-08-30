@@ -29,11 +29,13 @@ from strixlab.builds import (
 )
 from strixlab.locks import exclusive_lock
 from strixlab.secure_fs import (
+    directory_open_flags,
     ensure_directory_fsynced,
     exclusive_create_flags,
     fsync_directory,
     readonly_open_flags,
     rename_noreplace,
+    try_open_owned_directory,
     write_all,
     write_exclusive,
 )
@@ -1805,9 +1807,7 @@ def _require_owned_directory(path: Path) -> None:
         raise BuildCacheError(f"build cache directory is unsafe: {path}")
 
 
-_DIR_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
-if hasattr(os, "O_NOFOLLOW"):
-    _DIR_OPEN_FLAGS |= os.O_NOFOLLOW
+_DIR_OPEN_FLAGS = directory_open_flags()
 
 
 def _open_owned_child_dir(dir_fd: int, name: str, describe: Path) -> int | None:
@@ -1819,15 +1819,9 @@ def _open_owned_child_dir(dir_fd: int, name: str, describe: Path) -> int | None:
     """
 
     try:
-        child_fd = os.open(name, _DIR_OPEN_FLAGS, dir_fd=dir_fd)
-    except FileNotFoundError:
-        return None
+        return try_open_owned_directory(name, dir_fd=dir_fd)
     except OSError as exc:
         raise BuildCacheError(f"build cache directory is unsafe: {describe}") from exc
-    if os.fstat(child_fd).st_uid != os.geteuid():
-        os.close(child_fd)
-        raise BuildCacheError(f"build cache directory is unsafe: {describe}")
-    return child_fd
 
 
 def _open_owned_build_subdir(root: Path, child: Path) -> int | None:

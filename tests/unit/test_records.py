@@ -7,10 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from strixlab.build_records import (
-    BuildRecordError,
+from strixlab.records import (
+    RecordError,
     hash_owned_tree,
     publish_record,
+    record_manifest_digest,
     record_source_digest,
     verify_record,
 )
@@ -46,7 +47,7 @@ def test_hash_owned_tree_rejects_symlinked_file(tmp_path: Path) -> None:
     source = _source(tmp_path)
     (source / "link.json").symlink_to(source / "registry.json")
     # A symlink in the tree fails closed via O_NOFOLLOW, never followed.
-    with pytest.raises(BuildRecordError, match="unavailable|not an owned regular file"):
+    with pytest.raises(RecordError, match="unavailable|not an owned regular file"):
         hash_owned_tree(source)
 
 
@@ -56,8 +57,32 @@ def test_hash_owned_tree_rejects_symlinked_subdirectory(tmp_path: Path) -> None:
     outside.mkdir(mode=0o700)
     (outside / "secret").write_bytes(b"x")
     (source / "escape").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(BuildRecordError, match="unsafe directory"):
+    with pytest.raises(RecordError, match="unsafe directory"):
         hash_owned_tree(source)
+
+
+def test_record_manifest_digest_pins_the_frozen_domain() -> None:
+    # The records primitive was promoted out of the build subsystem under a new
+    # module and error name, but its digest domain must stay byte-identical to the
+    # BUILD-001 contract so previously published records still verify. This pins
+    # both the public helper and the exact frozen digest of a fixed manifest.
+    import hashlib
+
+    from strixlab.source_identity import length_frame
+
+    manifest_bytes = b'{"files":[],"schema_version":1}\n'
+    framed = length_frame(
+        "strixlab.build.record-manifest.v1",
+        (("manifest", manifest_bytes),),
+    )
+    expected = "record-sha256:" + hashlib.sha256(framed).hexdigest()
+    assert record_manifest_digest(manifest_bytes) == expected
+
+
+def test_record_error_is_the_public_error_name() -> None:
+    # RecordError (not the old BuildRecordError) is the stable public failure type.
+    assert RecordError.__name__ == "RecordError"
+    assert issubclass(RecordError, Exception)
 
 
 def test_publish_record_copies_payloads_and_verifies_manifest(tmp_path: Path) -> None:
@@ -92,7 +117,7 @@ def test_verify_record_rejects_payload_tampering(tmp_path: Path) -> None:
     publish_record(source, destination)
     (destination / "logs" / "configure.stdout").write_bytes(b"changed\n")
 
-    with pytest.raises(BuildRecordError, match="integrity mismatch"):
+    with pytest.raises(RecordError, match="integrity mismatch"):
         verify_record(destination)
 
 
@@ -102,7 +127,7 @@ def test_publish_record_rejects_symlinks(tmp_path: Path) -> None:
     records = tmp_path / "records"
     records.mkdir(mode=0o700)
 
-    with pytest.raises(BuildRecordError, match="record input"):
+    with pytest.raises(RecordError, match="record input"):
         publish_record(source, records / "attempt-1")
 
     assert not (records / "attempt-1").exists()
@@ -133,7 +158,7 @@ def test_record_verification_rejects_unlisted_payloads(tmp_path: Path) -> None:
     descriptor = os.open(destination / "extra", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     os.close(descriptor)
 
-    with pytest.raises(BuildRecordError, match="payload set"):
+    with pytest.raises(RecordError, match="payload set"):
         verify_record(destination)
 
 
@@ -143,7 +168,7 @@ def test_publish_record_rejects_a_caller_supplied_manifest(tmp_path: Path) -> No
     records = tmp_path / "records"
     records.mkdir(mode=0o700)
 
-    with pytest.raises(BuildRecordError, match="cannot supply"):
+    with pytest.raises(RecordError, match="cannot supply"):
         publish_record(source, records / "attempt-1")
 
 
@@ -155,7 +180,7 @@ def test_verify_record_rejects_invalid_and_duplicate_manifest_entries(tmp_path: 
     publish_record(source, invalid)
     manifest_path = invalid / "record-manifest.json"
     manifest_path.write_bytes(b"{}\n")
-    with pytest.raises(BuildRecordError, match="manifest is invalid"):
+    with pytest.raises(RecordError, match="manifest is invalid"):
         verify_record(invalid)
 
     duplicate = records / "duplicate"
@@ -164,5 +189,5 @@ def test_verify_record_rejects_invalid_and_duplicate_manifest_entries(tmp_path: 
     manifest = json.loads(manifest_path.read_bytes())
     manifest["files"].append(manifest["files"][0])
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(BuildRecordError, match="duplicate paths"):
+    with pytest.raises(RecordError, match="duplicate paths"):
         verify_record(duplicate)

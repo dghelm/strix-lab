@@ -41,6 +41,52 @@ def readonly_open_flags() -> int:
     return _READONLY_OPEN_FLAGS
 
 
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+if hasattr(os, "O_NOFOLLOW"):
+    _DIRECTORY_OPEN_FLAGS |= os.O_NOFOLLOW
+
+
+def directory_open_flags() -> int:
+    """Open flags for a no-follow, read-only directory descriptor."""
+
+    return _DIRECTORY_OPEN_FLAGS
+
+
+class UnownedDirectoryError(OSError):
+    """An opened directory descriptor is not owned by the current user."""
+
+
+def open_owned_directory(path: str | os.PathLike[str], *, dir_fd: int | None = None) -> int:
+    """Open ``path`` as a current-user-owned, non-symlink directory descriptor.
+
+    ``O_DIRECTORY | O_NOFOLLOW`` makes a symlink or non-directory fail to open; a
+    directory owned by another user raises :class:`UnownedDirectoryError`. The
+    descriptor is closed before either failure propagates. Callers map the raised
+    ``OSError`` (and its :class:`UnownedDirectoryError` subclass) to their own domain
+    error type and message.
+    """
+
+    descriptor = os.open(path, _DIRECTORY_OPEN_FLAGS, dir_fd=dir_fd)
+    try:
+        if os.fstat(descriptor).st_uid != os.geteuid():
+            raise UnownedDirectoryError(errno.EPERM, "directory is not owned by the current user")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def try_open_owned_directory(
+    path: str | os.PathLike[str], *, dir_fd: int | None = None
+) -> int | None:
+    """Like :func:`open_owned_directory`, but return ``None`` when ``path`` is absent."""
+
+    try:
+        return open_owned_directory(path, dir_fd=dir_fd)
+    except FileNotFoundError:
+        return None
+
+
 def write_all(descriptor: int, content: bytes) -> None:
     """Write every byte of ``content`` to ``descriptor``, refusing short writes."""
 
@@ -154,17 +200,34 @@ def fsync_tree(root: Path) -> None:
 
 
 def rename_noreplace(source: Path, destination: Path) -> None:
-    """Atomically publish one path without replacing an existing entry."""
+    """Atomically publish one path without replacing an existing entry.
+
+    A thin wrapper over :func:`rename_noreplace_at` anchored at ``AT_FDCWD``: the
+    same ``renameat2(RENAME_NOREPLACE)`` call and the same ``OSError`` (hence
+    ``FileExistsError`` on ``EEXIST``) on failure.
+    """
+
+    rename_noreplace_at(_AT_FDCWD, os.fspath(source), _AT_FDCWD, os.fspath(destination))
+
+
+def rename_noreplace_at(old_dir_fd: int, old_name: str, new_dir_fd: int, new_name: str) -> None:
+    """Descriptor-anchored no-replace rename of ``old_name`` to ``new_name``.
+
+    Both names are resolved relative to the given directory descriptors, so a
+    directory symlinked in for a race cannot redirect the publication. An existing
+    ``new_name`` (including a symlink) raises ``FileExistsError`` rather than being
+    replaced or followed.
+    """
 
     if _RENAMEAT2 is None:
         raise OSError(errno.ENOSYS, "renameat2 is required for no-replace publication")
     result = _RENAMEAT2(
-        _AT_FDCWD,
-        os.fsencode(source),
-        _AT_FDCWD,
-        os.fsencode(destination),
+        old_dir_fd,
+        os.fsencode(old_name),
+        new_dir_fd,
+        os.fsencode(new_name),
         _RENAME_NOREPLACE,
     )
     if result != 0:
         error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), destination)
+        raise OSError(error, os.strerror(error), new_name)

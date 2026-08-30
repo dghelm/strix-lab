@@ -10,11 +10,67 @@ from __future__ import annotations
 
 import os
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from strixlab.secure_fs import ensure_directory_fsynced
+from strixlab import secure_fs
+
+
+def prepare_directory_tree(
+    home: Path,
+    dirs: Sequence[Path],
+    *,
+    create: bool,
+    validate: Callable[[Path], None],
+) -> None:
+    """Create (when ``create``) and validate a parent-before-child directory sequence.
+
+    The single storage-preparation procedure shared by every StrixLab storage tree.
+    When creating, ``home`` is made if absent and validated **before** any child is
+    created, then each directory in ``dirs`` (in parent-before-child order) is created
+    descriptor-relative under its already-validated parent's held, no-follow directory
+    descriptor and validated in turn — so a symlinked or foreign home/parent is caught
+    before anything is created through or beneath it, and a child is never created by
+    re-resolving a mutable ancestor by pathname. Every entry (``home`` included) is
+    validated again afterwards. ``validate(path)`` is the caller's domain adapter,
+    raising its own exception type/message on a missing or unsafe directory.
+    """
+
+    if create:
+        _create_directory_tree(home, dirs, validate)
+    for path in (home, *dirs):
+        validate(path)
+
+
+def _create_directory_tree(
+    home: Path, dirs: Sequence[Path], validate: Callable[[Path], None]
+) -> None:
+    if not home.exists():
+        home.mkdir(mode=0o700, parents=True)
+    validate(home)
+    held: dict[Path, int] = {}
+    try:
+        held[home] = secure_fs.open_owned_directory(home)
+        for path in dirs:
+            parent_fd = held[path.parent]
+            name = path.name
+            created = True
+            try:
+                os.mkdir(name, 0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                created = False
+            # Domain-validate the child (symlink/owner/mode) before descending into it,
+            # then hold its no-follow descriptor so its own children are created under a
+            # verified, non-mutable directory. The parent flush (durability only, not the
+            # security boundary) makes the new entry durable.
+            validate(path)
+            held[path] = secure_fs.open_owned_directory(name, dir_fd=parent_fd)
+            if created:
+                secure_fs.fsync_directory(path.parent)
+    finally:
+        for fd in held.values():
+            os.close(fd)
 
 
 def is_unsafe_directory(metadata: os.stat_result) -> bool:
@@ -105,22 +161,10 @@ def storage_root_dirs(roots: BuildStorageRoots) -> tuple[Path, ...]:
 def prepare_storage_tree(
     roots: BuildStorageRoots, *, create: bool, validate: Callable[[Path], None]
 ) -> None:
-    """Create (when ``create``) and validate the shared storage tree.
+    """Create (when ``create``) and validate the build storage tree.
 
-    The single procedure both subsystems share: when creating, ``home`` is made if
-    absent, then every storage root is exclusively created in parent-before-child
-    order with its parent fsynced once on creation; a pre-existing entry is validated
-    in place so an unsafe parent fails closed before a child is created beneath it.
-    Every entry (``home`` included) is validated afterwards. ``validate(path)`` is the
-    caller's domain adapter, raising its own exception type/message on a missing or
-    unsafe directory — this function itself raises nothing.
+    A thin wrapper binding the build storage root sequence to the shared
+    :func:`prepare_directory_tree` procedure.
     """
 
-    if create:
-        if not roots.home.exists():
-            roots.home.mkdir(mode=0o700, parents=True)
-        for path in storage_root_dirs(roots):
-            if not ensure_directory_fsynced(path):
-                validate(path)
-    for path in (roots.home, *storage_root_dirs(roots)):
-        validate(path)
+    prepare_directory_tree(roots.home, storage_root_dirs(roots), create=create, validate=validate)

@@ -20,15 +20,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from strixlab.build_identity import attempt_id
 from strixlab.build_paths import build_storage_roots, is_unsafe_directory, prepare_storage_tree
-from strixlab.build_records import (
-    BuildRecordError,
+from strixlab.locks import exclusive_lock
+from strixlab.records import (
+    RecordError,
     RecordFileV1,
     RecordVerification,
     publish_record,
     record_source_digest,
     verify_record,
 )
-from strixlab.locks import exclusive_lock
 from strixlab.secure_fs import (
     exclusive_create_flags,
     fsync_directory,
@@ -611,7 +611,7 @@ def _validate_attempt_identity(registry: AttemptRegistryV1) -> None:
 def _verify_record(path: Path, *, error: str) -> RecordVerification:
     try:
         return verify_record(path)
-    except BuildRecordError as exc:
+    except RecordError as exc:
         raise BuildStateError(error) from exc
 
 

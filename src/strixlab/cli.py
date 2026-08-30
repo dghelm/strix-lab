@@ -21,15 +21,15 @@ from strixlab.builds import (
     inspect_attempt,
     inspect_recipe,
 )
+from strixlab.bundles import BundleError, export_bundle, verify_bundle
 from strixlab.cmake_build import CMakeBuildError, execute_cmake_build
 from strixlab.config import read_manifest
 from strixlab.doctor import (
-    RedactionContext,
     ReportWriteError,
     SensitiveInterpolationError,
-    UnsafeDiagnosticError,
     run_doctor,
 )
+from strixlab.evidence import RunError, inspect_run
 from strixlab.git_boundary import SshTrust
 from strixlab.manifests import (
     BuildProfileV1,
@@ -39,7 +39,10 @@ from strixlab.manifests import (
     validate_manifest,
 )
 from strixlab.paths import resolve_home
+from strixlab.records import RecordError
 from strixlab.schema_registry import schema_resource_bytes
+from strixlab.secret_policy import RedactionContext
+from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
 
@@ -64,10 +67,16 @@ schema_app = typer.Typer(help="Inspect versioned manifest schemas.")
 manifest_app = typer.Typer(help="Validate versioned manifests.")
 source_app = typer.Typer(help="Prepare and manage isolated Git source worktrees.")
 build_app = typer.Typer(help="Reproducibly build, inspect, and clean pinned source trees.")
+run_app = typer.Typer(help="Inspect finalized run-evidence records.")
+bundle_app = typer.Typer(help="Export and verify deterministic run-evidence bundles.")
 app.add_typer(schema_app, name="schema")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(source_app, name="source")
 app.add_typer(build_app, name="build")
+app.add_typer(run_app, name="run")
+app.add_typer(bundle_app, name="bundle")
+
+_EVIDENCE_DOMAIN_ERRORS = (OSError, ValueError, RunError, RecordError, BundleError)
 
 
 def _version_callback(value: bool) -> None:
@@ -371,6 +380,26 @@ def _doctor_echo(message: str, context: RedactionContext, *, err: bool = False) 
     typer.echo(message, err=err)
 
 
+def _evidence_terminal_context() -> tuple[dict[str, str], RedactionContext]:
+    environ = dict(os.environ)
+    return environ, RedactionContext.from_environ(environ)
+
+
+def _evidence_echo(
+    message: str,
+    context: RedactionContext,
+    *,
+    err: bool = False,
+    nl: bool = True,
+) -> None:
+    try:
+        context.assert_text_safe(message)
+    except UnsafeDiagnosticError:
+        typer.echo("evidence command failed: unable to safely render terminal output", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(message, err=err, nl=nl)
+
+
 @app.command("doctor")
 def doctor(
     machine: Annotated[
@@ -434,6 +463,75 @@ def doctor(
             )
     _doctor_echo(f"report: {result.path}", context, err=True)
     raise typer.Exit(code=1)
+
+
+@run_app.command("inspect")
+def run_inspect(
+    run_id: Annotated[str, typer.Argument(help="Run ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Verify a finalized run's index, record, checksums, and terminal status."""
+
+    _environ, context = _evidence_terminal_context()
+    try:
+        inspection = inspect_run(run_id, home=resolve_home(home))
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"run inspect failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    payload = {
+        "checksums_sha256": inspection.checksums_sha256,
+        "outcome": str(inspection.outcome),
+        "record": str(inspection.record),
+        "record_sha256": inspection.record_sha256,
+        "run_id": inspection.run_id,
+        "state": str(inspection.state),
+    }
+    _evidence_echo(canonical_json_bytes(payload).decode(), context, nl=False)
+
+
+@bundle_app.command("export")
+def bundle_export(
+    run_id: Annotated[str, typer.Argument(help="Run ID.")],
+    destination: Annotated[Path, typer.Argument(help="New bundle directory to create.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Export a finalized run to a deterministic, verified bundle directory."""
+
+    environ, context = _evidence_terminal_context()
+    try:
+        export_bundle(run_id, destination, home=resolve_home(home), environ=environ)
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"bundle export failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    _evidence_echo(str(destination), context)
+
+
+@bundle_app.command("verify")
+def bundle_verify(
+    bundle_directory: Annotated[Path, typer.Argument(help="Bundle directory to verify.")],
+) -> None:
+    """Verify a bundle directory and print its canonical verified summary."""
+
+    _environ, context = _evidence_terminal_context()
+    try:
+        inspection = verify_bundle(bundle_directory)
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"bundle verify failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    payload = {
+        "member_count": inspection.member_count,
+        "outcome": inspection.outcome,
+        "path": str(inspection.path),
+        "run_id": inspection.run_id,
+        "run_record_sha256": inspection.run_record_sha256,
+    }
+    _evidence_echo(canonical_json_bytes(payload).decode(), context, nl=False)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

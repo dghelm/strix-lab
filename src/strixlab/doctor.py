@@ -7,7 +7,7 @@ import tempfile
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager, suppress
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
@@ -25,11 +25,17 @@ from strixlab.machine import (
 from strixlab.manifests import DashId, MachineProfileV1, resolve_and_validate_manifest
 from strixlab.paths import resolve_home
 from strixlab.secret_policy import (
+    RedactionContext,
     SensitiveInterpolationError,
+    UnsafeOutputError,
     reject_sensitive_interpolations,
 )
 from strixlab.secret_policy import is_sensitive_name as _is_sensitive_name
 from strixlab.serialization import canonical_json_bytes
+
+# The neutral unsafe-output exception now lives in secret_policy; keep the historic
+# doctor name as an alias for existing importers.
+UnsafeDiagnosticError = UnsafeOutputError
 
 __all__ = ["SensitiveInterpolationError", "reject_sensitive_interpolations"]
 
@@ -150,47 +156,8 @@ class DoctorReportV1(ReportModel):
     redaction: RedactionV1
 
 
-class UnsafeDiagnosticError(RuntimeError):
-    """Raised when an outgoing artifact could disclose sensitive data."""
-
-
 class ReportWriteError(RuntimeError):
     """Raised when an atomic report publication fails."""
-
-
-@dataclass(frozen=True, slots=True)
-class RedactionContext:
-    """Precomputed secret values shared by every redaction and safety check.
-
-    The secret set is fixed for a run, so it is discovered once and reused for
-    designated free-text redaction, whole-payload verification, and terminal-
-    sink verification instead of rescanning the environment at each site.
-    """
-
-    secrets: tuple[str, ...] = field(repr=False)
-
-    @classmethod
-    def from_environ(cls, environ: Mapping[str, str]) -> RedactionContext:
-        return cls(_secret_values(environ))
-
-    def redact(self, value: str | None) -> str | None:
-        if value is None:
-            return None
-        for secret in self.secrets:
-            value = value.replace(secret, "[REDACTED]")
-        return value
-
-    def assert_payload_safe(self, payload: bytes) -> None:
-        """Fail closed if a serialized artifact still discloses a secret."""
-
-        for secret in self.secrets:
-            if secret.encode() in payload:
-                raise UnsafeDiagnosticError("diagnostic output failed secret-safety validation")
-
-    def assert_text_safe(self, value: str) -> None:
-        """Fail closed if a terminal line would disclose a sensitive value."""
-
-        self.assert_payload_safe(value.encode())
 
 
 class DoctorRun(BaseModel):
@@ -463,16 +430,6 @@ def capture_environment(environ: Mapping[str, str]) -> tuple[dict[str, str], Red
         sensitive_name_count=len(names),
         sensitive_names=tuple(names[:MAX_SENSITIVE_NAMES]),
         sensitive_names_truncated=len(names) > MAX_SENSITIVE_NAMES,
-    )
-
-
-def _secret_values(environ: Mapping[str, str]) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {value for name, value in environ.items() if value and _is_sensitive_name(name)},
-            key=len,
-            reverse=True,
-        )
     )
 
 
