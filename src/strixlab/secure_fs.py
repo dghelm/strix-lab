@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
 from pathlib import Path
 
 _EXCLUSIVE_CREATE_FLAGS = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
 if hasattr(os, "O_NOFOLLOW"):
     _EXCLUSIVE_CREATE_FLAGS |= os.O_NOFOLLOW
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_RENAMEAT2 = getattr(_LIBC, "renameat2", None)
+if _RENAMEAT2 is not None:
+    _RENAMEAT2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    _RENAMEAT2.restype = ctypes.c_int
 
 
 def exclusive_create_flags() -> int:
@@ -44,3 +59,20 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def rename_noreplace(source: Path, destination: Path) -> None:
+    """Atomically publish one path without replacing an existing entry."""
+
+    if _RENAMEAT2 is None:
+        raise OSError(errno.ENOSYS, "renameat2 is required for no-replace publication")
+    result = _RENAMEAT2(
+        _AT_FDCWD,
+        os.fsencode(source),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), destination)
