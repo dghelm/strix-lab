@@ -219,6 +219,12 @@ class SourceLease:
     worktree: Path
     record: Path
     evidence: SourceEvidence
+    verify_callback: Callable[[], None]
+
+    def verify(self) -> None:
+        """Revalidate the leased worktree against its published evidence."""
+
+        self.verify_callback()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1542,13 +1548,18 @@ def lease_source(preparation_id: str, *, home: Path) -> Iterator[SourceLease]:
                 scratch=scratch,
                 locator=registry.mirror_path,
             )
-            _verify_candidate_for_cleanup(registry, evidence, git, require_match=True)
+
+            def verify_candidate() -> None:
+                _verify_candidate_for_cleanup(registry, evidence, git, require_match=True)
+
+            verify_candidate()
             yield SourceLease(
                 preparation_id,
                 registry.source_id,
                 worktree,
                 Path(registry.record_path),
                 evidence,
+                verify_candidate,
             )
         finally:
             shutil.rmtree(scratch)

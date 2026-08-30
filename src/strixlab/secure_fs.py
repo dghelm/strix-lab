@@ -10,6 +10,9 @@ from pathlib import Path
 _EXCLUSIVE_CREATE_FLAGS = os.O_CLOEXEC | os.O_CREAT | os.O_EXCL | os.O_WRONLY
 if hasattr(os, "O_NOFOLLOW"):
     _EXCLUSIVE_CREATE_FLAGS |= os.O_NOFOLLOW
+_READONLY_OPEN_FLAGS = os.O_CLOEXEC | os.O_RDONLY
+if hasattr(os, "O_NOFOLLOW"):
+    _READONLY_OPEN_FLAGS |= os.O_NOFOLLOW
 _AT_FDCWD = -100
 _RENAME_NOREPLACE = 1
 _LIBC = ctypes.CDLL(None, use_errno=True)
@@ -31,6 +34,23 @@ def exclusive_create_flags() -> int:
     return _EXCLUSIVE_CREATE_FLAGS
 
 
+def readonly_open_flags() -> int:
+    """Open flags for a no-follow, read-only file open."""
+
+    return _READONLY_OPEN_FLAGS
+
+
+def write_all(descriptor: int, content: bytes) -> None:
+    """Write every byte of ``content`` to ``descriptor``, refusing short writes."""
+
+    view = memoryview(content)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short write")
+        view = view[written:]
+
+
 def write_exclusive(path: Path, content: bytes, mode: int = 0o600) -> None:
     """Create ``path`` exclusively without following symlinks, then fsync.
 
@@ -40,12 +60,7 @@ def write_exclusive(path: Path, content: bytes, mode: int = 0o600) -> None:
 
     descriptor = os.open(path, _EXCLUSIVE_CREATE_FLAGS, mode)
     try:
-        view = memoryview(content)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("short write")
-            view = view[written:]
+        write_all(descriptor, content)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)

@@ -97,6 +97,9 @@ def test_stale_attempt_is_finalized_as_interrupted_before_retry(tmp_path: Path) 
     layout = build_module._layout(home, create=True)
     stale = build_module._allocate_attempt(layout, _RECIPE, _nonce(6))
     stale.mark_active()
+    private = stale.root / "private"
+    private.mkdir(mode=0o700)
+    (private / "secret").write_text("ephemeral", encoding="utf-8")
     stale.registry = stale.registry.model_copy(update={"owner": _stale_owner(stale.registry.owner)})
     build_module._atomic_model(stale.root / "current.json", stale.registry)
 
@@ -108,6 +111,7 @@ def test_stale_attempt_is_finalized_as_interrupted_before_retry(tmp_path: Path) 
         AttemptOutcome.INTERRUPTED,
         AttemptOutcome.FAILED,
     ]
+    assert not (layout.attempt_records / stale.registry.attempt_id / "private").exists()
 
 
 def test_recovery_finishes_publication_interrupted_after_record_rename(tmp_path: Path) -> None:

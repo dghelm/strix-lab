@@ -148,6 +148,23 @@ class BuildAttemptSession:
     def root(self) -> Path:
         return self._layout.attempts / self.registry.attempt_id
 
+    @property
+    def snapshots(self) -> Path:
+        return self._layout.snapshots
+
+    @property
+    def materialized(self) -> Path:
+        return self._layout.materialized
+
+    @property
+    def probe_root(self) -> Path:
+        return self.root / "private" / "probe"
+
+    def build_root(self, build_id: str) -> Path:
+        if _BUILD_RE.fullmatch(build_id) is None:
+            raise ValueError("invalid machine-local build ID")
+        return self._layout.materialized / build_id
+
     def write_evidence(self, relative: str, content: bytes) -> Path:
         path = _safe_attempt_relative(relative)
         return _write_attempt_file(self.root, path, content)
@@ -674,6 +691,7 @@ def _finalize_attempt(
         raise BuildStateError("successful attempt outcomes require a build ID")
     root = layout.attempts / registry.attempt_id
     _validate_attempt_root(root, registry)
+    _remove_private_attempt_state(root)
     if registry.state is AttemptState.RECORD_PUBLISHED:
         destination = layout.attempt_records / registry.attempt_id
         verification = _verify_record(
@@ -766,6 +784,22 @@ def _finalize_attempt(
     )
 
 
+def _remove_private_attempt_state(root: Path) -> None:
+    private = root / "private"
+    try:
+        metadata = private.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise BuildStateError(f"unsafe private build-attempt state: {private}")
+    shutil.rmtree(private)
+    fsync_directory(root)
+
+
 def _recover_stale_attempts(layout: _BuildLayout, recipe_id: str) -> tuple[AttemptResult, ...]:
     results: list[AttemptResult] = []
     for root in sorted(layout.attempts.iterdir()):
@@ -845,6 +879,12 @@ def _recover_index_teardowns(layout: _BuildLayout, recipe_id: str) -> None:
             recipe_id,
             entry.model_copy(update={"state": AttemptState.TORN_DOWN}),
         )
+
+
+def build_snapshot_directory(*, home: Path) -> Path:
+    """Return the owned shared snapshot directory for build-attempt leases."""
+
+    return _layout(home, create=True).snapshots
 
 
 @contextlib.contextmanager
