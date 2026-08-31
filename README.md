@@ -33,6 +33,9 @@ A clean checkout provides a strict, evidence-oriented CLI:
   (`run inspect`).
 - **Deterministic bundles** — export and verify portable run-evidence bundles
   (`bundle export`, `bundle verify`).
+- **Offline comparison judge** — compare two finalized, equivalent, successful
+  runs into one immutable comparison run with a conservative, non-scoring
+  verdict (`compare`).
 
 ### What does not exist yet
 
@@ -119,6 +122,22 @@ RUN_ID='run-...'
 uv run strixlab run inspect "$RUN_ID"
 uv run strixlab bundle export "$RUN_ID" "../strixlab-bundle-$RUN_ID"
 uv run strixlab bundle verify "../strixlab-bundle-$RUN_ID"
+```
+
+Optionally, run the suite a second time to produce an equivalent run and compare
+the two offline. The comparison is conservative and non-scoring; its no-op result
+is `inconclusive`, never a fabricated win. A comparison bundle is a derived report
+that is **not** independently verifiable without both source-run bundles, so export
+all three when offline verification is required.
+
+```bash
+# CANDIDATE_RUN_ID is a second `run suite` of the same suite/machine/model.
+uv run strixlab compare "$RUN_ID" "$CANDIDATE_RUN_ID"
+COMPARISON_RUN_ID='run-...'
+
+uv run strixlab run inspect "$COMPARISON_RUN_ID"
+uv run strixlab bundle export "$COMPARISON_RUN_ID" "../strixlab-bundle-$COMPARISON_RUN_ID"
+uv run strixlab bundle export "$CANDIDATE_RUN_ID" "../strixlab-bundle-$CANDIDATE_RUN_ID"
 ```
 
 The quoted `...` assignments are deliberate copy points, not literal values.

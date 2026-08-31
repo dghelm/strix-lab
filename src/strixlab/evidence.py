@@ -1262,6 +1262,37 @@ def list_portable_entries(active: Path) -> tuple[PortableEvidenceV1, ...]:
     return _load_portable_entries(active)
 
 
+def read_record_member(root: Path, relative: str, *, limit: int = _MAX_MEMBER_BYTES) -> bytes:
+    """Descriptor-anchored, no-follow read of one owned regular file under a run tree.
+
+    A trusted caller (a finalized-suite snapshot loader) reads a member of a finalized
+    ``records/<run-id>`` tree — a top-level control file such as
+    ``manifest.resolved.yaml`` or a content-addressed ``portable/blobs/<sha256>`` — using
+    the same open-owned-directory + identity-checked read idiom the run and bundle
+    verifiers use, instead of :meth:`pathlib.Path.read_bytes` or a second traversal
+    implementation. ``relative`` is validated with :func:`run_relative`; each component is
+    descended one at a time through held, no-follow, owned directory descriptors, and the
+    leaf's owner, ``0o600`` mode, regular-file type, size bound, and pre/post
+    device+inode+size are all checked, so a symlink or same-uid inode swap during the read
+    fails closed. This authenticates *safety of the read*; digest/size authentication of
+    the returned bytes against the record's immutable manifest remains the caller's
+    responsibility.
+    """
+
+    path = run_relative(relative)
+    *parents, filename = path.parts
+    root_fd = _open_owned_directory_fd(root)
+    try:
+        dir_fd = _descend_owned(root_fd, tuple(parents), create=False)
+        try:
+            return _read_owned_regular_at(dir_fd, filename, limit)
+        finally:
+            if dir_fd != root_fd:
+                os.close(dir_fd)
+    finally:
+        os.close(root_fd)
+
+
 def validate_portable_payload(content: bytes, media_type: str) -> None:
     """Enforce the closed portable payload policy (UTF-8, controls, structure).
 

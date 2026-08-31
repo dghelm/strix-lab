@@ -71,6 +71,14 @@ uv run strixlab bundle export "$RUN_ID" "../strixlab-bundle-$RUN_ID"
 uv run strixlab bundle verify "../strixlab-bundle-$RUN_ID"
 ```
 
+Optionally, produce a second equivalent run and compare the two offline with
+`strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID`, then inspect and export the
+comparison run alongside both source runs. The comparison is offline, matched,
+conservative, and non-scoring: its no-op result is `inconclusive`, and a comparison
+bundle is a derived report that is not independently verifiable without both
+source-run bundles. Never present an `inconclusive`, `regression`, or `mixed`
+verdict as a failure of the comparison itself, or a comparison as an official score.
+
 Do not work around a failed correctness gate or claim a performance result from
 an incomplete run. Report the failure or friction exactly, with secrets and
 identifying paths redacted. A successful run is still a provisional field

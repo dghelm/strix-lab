@@ -29,7 +29,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
 
 from strixlab.adapters import backend_ops, llama_bench, llama_server
 from strixlab.adapters.backend_ops import (
@@ -58,6 +59,7 @@ from strixlab.build_cache import BuildCacheError, BuildLease, CanonicalBuildReco
 from strixlab.build_identity import ROOT_PLACEHOLDERS
 from strixlab.evidence import (
     Clock,
+    PortableEvidenceV1,
     RunInspection,
     RunOutcome,
     RunSession,
@@ -65,6 +67,7 @@ from strixlab.evidence import (
     begin_run,
     inspect_run,
     list_portable_entries,
+    read_record_member,
 )
 from strixlab.locks import LockAttempt, exclusive_lock
 from strixlab.manifests import (
@@ -77,24 +80,28 @@ from strixlab.manifests import (
     suite_greedy_case_id,
     suite_measurement_case_id,
     suite_warmup_case_id,
+    validate_manifest,
 )
 from strixlab.models import (
     ModelError,
+    ModelReceiptEvidence,
     ModelReceiptEvidenceV2,
     ModelReceiptV1,
     load_model_receipt,
     receipt_evidence_digest,
     require_current_model,
 )
-from strixlab.serialization import canonical_json_bytes
+from strixlab.serialization import canonical_json_bytes, canonical_yaml_bytes
 
 __all__ = [
+    "FinalizedSuiteSnapshot",
     "PlannedCase",
     "SuiteError",
     "SuiteExecutionError",
     "SuiteHooks",
     "SuiteResultV1",
     "SuiteRunResult",
+    "load_finalized_suite_snapshot",
     "plan_performance",
     "run_suite",
 ]
@@ -321,6 +328,27 @@ class SuiteResultV1(_SuiteModel):
     samples: tuple[SampleReferenceV1, ...]
 
 
+class _BuildInputSnapshotV1(_SuiteModel):
+    schema_version: Literal[1] = 1
+    build_id: BuildIdStr
+    canonical_record_sha256: RecordSha
+    canonical: CanonicalBuildRecordV1
+
+
+class _ModelInputSnapshotV1(_SuiteModel):
+    schema_version: Literal[1] = 1
+    model_id: DashIdStr
+    model_receipt_sha256: Sha256Hex
+    evidence: ModelReceiptEvidenceV2
+
+
+class _MachineInputSnapshotV1(_SuiteModel):
+    schema_version: Literal[1] = 1
+    machine_id: DashIdStr
+    profile_sha256: Sha256Hex
+    profile: MachineProfileV1
+
+
 # --- Deterministic performance planner ----------------------------------------
 
 
@@ -362,6 +390,41 @@ def plan_performance(performance: SuitePerformanceV1) -> tuple[PlannedCase, ...]
                 )
             )
     return tuple(planned)
+
+
+def _backend_case(manifest: SuiteManifestV1) -> BackendOpsCaseV1:
+    spec = manifest.correctness.backend_ops
+    return BackendOpsCaseV1(
+        id=spec.id,
+        operations=tuple(spec.operations),
+        params_regex=spec.params_regex,
+        backend=spec.backend,
+    )
+
+
+def _server_case(manifest: SuiteManifestV1, prompt_id: str) -> LlamaServerCaseV1:
+    greedy = manifest.correctness.greedy
+    prompt = next((value for value in greedy.prompts if value.id == prompt_id), None)
+    if prompt is None:
+        raise SuiteError(f"suite manifest has no greedy prompt: {prompt_id}")
+    return LlamaServerCaseV1(
+        id=suite_greedy_case_id(greedy.id, prompt.id),
+        prompt=prompt.text,
+        n_predict=greedy.output_tokens,
+        seed=greedy.seed,
+        context_size=greedy.context_size,
+        gpu_layers=greedy.gpu_layers,
+    )
+
+
+def _bench_case(planned: PlannedCase) -> LlamaBenchCaseV1:
+    return LlamaBenchCaseV1(
+        id=planned.adapter_case_id,
+        prompt_tokens=planned.case.prompt_tokens,
+        generated_tokens=planned.case.generated_tokens,
+        repetitions=planned.repetitions,
+        metric_kind=("prompt-processing" if planned.case.prompt_tokens > 0 else "text-generation"),
+    )
 
 
 # --- Injectable dependencies --------------------------------------------------
@@ -414,14 +477,33 @@ def _require_gfx_target(canonical: CanonicalBuildRecordV1, gfx_target: str) -> N
         raise SuiteError("leased build gfx target does not match the suite requirement")
 
 
-def _resolve_target_executable(
-    artifacts: BuildArtifactsV1, target_name: str, root: Path
-) -> tuple[str, str]:
-    """Resolve one required target to exactly one regular ELF executable beneath root.
+def _validate_suite_input_eligibility(
+    canonical: CanonicalBuildRecordV1,
+    manifest: SuiteManifestV1,
+    evidence: ModelReceiptEvidence,
+) -> None:
+    """Replay the suite's offline-verifiable build and model admission gates."""
 
-    Returns the absolute binary path and the recorded artifact SHA-256; the adapters
-    re-hash and recheck each executable.
-    """
+    if evidence.manifest_id != manifest.model:
+        raise SuiteError("model receipt does not name the suite model")
+    if not isinstance(evidence, ModelReceiptEvidenceV2):
+        raise SuiteError("model receipt evidence is legacy v1 and cannot prove requirements")
+    if evidence.execution.required_sources or evidence.execution.required_features:
+        raise SuiteError("model execution requirements are not supported in this smoke suite v1")
+
+    build = manifest.build
+    source_evidence = canonical.source.source_evidence
+    if source_evidence.get("source_id") != build.source_id:
+        raise SuiteError("leased build source id does not match the suite requirement")
+    if source_evidence.get("base_commit") != build.source_commit:
+        raise SuiteError("leased build source commit does not match the suite requirement")
+    if canonical.toolchain_mode != build.toolchain_mode:
+        raise SuiteError("leased build toolchain mode does not match the suite requirement")
+    _require_gfx_target(canonical, build.gfx_target)
+
+
+def _resolve_target_artifact(artifacts: BuildArtifactsV1, target_name: str) -> tuple[str, str]:
+    """Resolve one required target to its unique relative path and recorded digest."""
 
     named = [target for target in artifacts.targets if target.name == target_name]
     if len(named) != 1:
@@ -442,7 +524,16 @@ def _resolve_target_executable(
     relative = PurePosixPath(artifact.path)
     if relative.is_absolute() or ".." in relative.parts:
         raise SuiteError(f"build artifact escapes the leased root: {target_name}")
-    return str(root / relative), artifact.sha256
+    return artifact.path, artifact.sha256
+
+
+def _resolve_target_executable(
+    artifacts: BuildArtifactsV1, target_name: str, root: Path
+) -> tuple[str, str]:
+    """Resolve one required target to an absolute executable path and recorded digest."""
+
+    relative, digest = _resolve_target_artifact(artifacts, target_name)
+    return str(root / PurePosixPath(relative)), digest
 
 
 # --- Hermetic runtime environment ---------------------------------------------
@@ -636,15 +727,7 @@ def _bind_adapter_inputs(
     """
 
     canonical = lease.canonical
-    build = manifest.build
-    evidence = canonical.source.source_evidence
-    if evidence.get("source_id") != build.source_id:
-        raise SuiteError("leased build source id does not match the suite requirement")
-    if evidence.get("base_commit") != build.source_commit:
-        raise SuiteError("leased build source commit does not match the suite requirement")
-    if canonical.toolchain_mode != build.toolchain_mode:
-        raise SuiteError("leased build toolchain mode does not match the suite requirement")
-    _require_gfx_target(canonical, build.gfx_target)
+    _validate_suite_input_eligibility(canonical, manifest, receipt.evidence)
     artifacts = canonical.artifacts
     return _AdapterInputs(
         build_id=lease.build_id,
@@ -753,14 +836,8 @@ def _run_backend_ops(
     hooks: SuiteHooks,
     state: _ProtocolState,
 ) -> bool:
-    spec = manifest.correctness.backend_ops
     timeouts = manifest.timeouts
-    case = BackendOpsCaseV1(
-        id=spec.id,
-        operations=tuple(spec.operations),
-        params_regex=spec.params_regex,
-        backend=spec.backend,
-    )
+    case = _backend_case(manifest)
     binary_path, binary_sha256 = inputs.backend_binary
     adapter_inputs = BackendOpsInputsV1(
         build_id=inputs.build_id, binary_path=binary_path, binary_sha256=binary_sha256
@@ -831,14 +908,7 @@ def _run_greedy(
     )
     prompt_verdicts: list[GreedyPromptVerdictV1] = []
     for prompt in greedy.prompts:
-        case = LlamaServerCaseV1(
-            id=suite_greedy_case_id(greedy.id, prompt.id),
-            prompt=prompt.text,
-            n_predict=greedy.output_tokens,
-            seed=greedy.seed,
-            context_size=greedy.context_size,
-            gpu_layers=greedy.gpu_layers,
-        )
+        case = _server_case(manifest, prompt.id)
         outcome = _invoke_server_case(
             run, hooks, case, adapter_inputs, receipt, runtime, timeouts, server_port
         )
@@ -920,15 +990,7 @@ def _run_performance(
         model_receipt_evidence=receipt.evidence,
     )
     for planned in plan_performance(manifest.performance):
-        case = LlamaBenchCaseV1(
-            id=planned.adapter_case_id,
-            prompt_tokens=planned.case.prompt_tokens,
-            generated_tokens=planned.case.generated_tokens,
-            repetitions=planned.repetitions,
-            metric_kind=(
-                "prompt-processing" if planned.case.prompt_tokens > 0 else "text-generation"
-            ),
-        )
+        case = _bench_case(planned)
         outcome = _invoke_bench_case(
             run, hooks, case, adapter_inputs, receipt, runtime, timeouts, planned.phase
         )
@@ -1096,19 +1158,6 @@ def run_suite(
         receipt = load_model_receipt(manifest.model, local_receipt_sha256, home=home)
     except ModelError as exc:
         raise SuiteError(f"model receipt authentication failed: {exc}") from exc
-    if receipt.evidence.manifest_id != manifest.model:
-        raise SuiteError("model receipt does not name the suite model")
-    evidence = receipt.evidence
-    if not isinstance(evidence, ModelReceiptEvidenceV2):
-        # A legacy v1 receipt carries no authenticated execution projection, so it cannot
-        # prove the model declares no execution requirements: it is ineligible before a
-        # run is allocated.
-        raise SuiteError("model receipt evidence is legacy v1 and cannot prove requirements")
-    if evidence.execution.required_sources or evidence.execution.required_features:
-        # This smoke v1 supports only models with no execution requirements. The
-        # requirement set is authenticated by the receipt/evidence digests, so emptiness
-        # is never inferred: a non-empty set fails closed before a run is allocated.
-        raise SuiteError("model execution requirements are not supported in this smoke suite v1")
     try:
         require_current_model(receipt)
     except ModelError as exc:
@@ -1208,3 +1257,582 @@ def _drive_under_machine_lock(
         result = _build_result(manifest, lease, receipt, snapshots, state)
         _publish_result(run, result)
         return result
+
+
+# --- Authenticated finalized-suite snapshot -----------------------------------
+#
+# The one reusable, descriptor-anchored seam that a downstream comparison judge
+# (JUDGE-001) uses to obtain an immutable, fully re-authenticated view of one
+# finalized *successful* smoke-suite run without reopening any unchecked path. Every
+# byte is read through ``read_record_member`` (owned, no-follow, identity-checked) and
+# rebound to its content address, and every stored projection is recomputed from the
+# authenticated terminal adapter samples and required to match exactly, so a canonical
+# but semantically misbound record fails closed.
+
+_INPUT_SNAPSHOT_SPECS: tuple[tuple[str, Literal["build", "environment"], type[BaseModel]], ...] = (
+    ("suite/build.json", "build", _BuildInputSnapshotV1),
+    ("suite/model.json", "environment", _ModelInputSnapshotV1),
+    ("suite/machine.json", "environment", _MachineInputSnapshotV1),
+)
+
+_SAMPLE_MODELS: dict[AdapterName, type[BaseModel]] = {
+    "backend-ops": BackendOpsSampleV1,
+    "llama-server": LlamaServerSampleV1,
+    "llama-bench": LlamaBenchSampleV1,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class FinalizedSuiteSnapshot:
+    """An immutable, fully re-authenticated view of one finalized successful suite run.
+
+    Every field is bound to the run's authenticated immutable record: the resolved
+    manifest bytes and their digest, the strictly parsed manifest and result, the
+    ``suite/result.json`` blob digest, the build/model/machine input snapshot digests,
+    and the ordered per-case measurement samples used for paired comparison. The record
+    digest is the authenticated ``record-sha256:`` identity returned by ``inspect_run``.
+    """
+
+    run_id: str
+    record: Path
+    record_sha256: str
+    resolved_manifest_bytes: bytes
+    resolved_manifest_sha256: str
+    manifest: SuiteManifestV1
+    result: SuiteResultV1
+    result_sha256: str
+    build_id: str
+    build_record_sha256: str
+    model_input_sha256: str
+    machine_input_sha256: str
+    case_order: tuple[str, ...]
+    measurement_windows: int
+    repetitions_per_window: int
+    case_samples: dict[str, tuple[float, ...]]
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthenticatedInputs:
+    build: _BuildInputSnapshotV1
+    model: _ModelInputSnapshotV1
+    machine: _MachineInputSnapshotV1
+    model_sha256: str
+    machine_sha256: str
+
+
+def _snapshot_blob(
+    record: Path, entries: dict[str, PortableEvidenceV1], logical_path: str
+) -> tuple[PortableEvidenceV1, bytes]:
+    """Read and re-authenticate one portable blob from a finalized record by logical path."""
+
+    entry = entries.get(logical_path)
+    if entry is None:
+        raise SuiteError(f"finalized run is missing portable evidence: {logical_path}")
+    content = read_record_member(record, f"portable/blobs/{entry.blob_sha256}")
+    if hashlib.sha256(content).hexdigest() != entry.blob_sha256 or len(content) != entry.size_bytes:
+        raise SuiteError(f"portable blob diverged from its index entry: {logical_path}")
+    return entry, content
+
+
+def _parse_canonical_json[ModelT: BaseModel](
+    content: bytes,
+    model: type[ModelT],
+    *,
+    validation_error: str,
+    canonical_error: str,
+) -> ModelT:
+    """Strictly parse canonical JSON into one closed evidence model."""
+
+    try:
+        value = model.model_validate_json(content)
+    except ValidationError as exc:
+        raise SuiteError(validation_error) from exc
+    if canonical_json_bytes(value.model_dump(mode="json")) != content:
+        raise SuiteError(canonical_error)
+    return value
+
+
+def _expected_sample_coordinates(
+    manifest: SuiteManifestV1, planned_cases: tuple[PlannedCase, ...]
+) -> tuple[tuple[AdapterName, SamplePhase, str, str], ...]:
+    """The exact ordered ``(adapter, phase, case_id, logical_path)`` schedule of a passed run."""
+
+    coordinates: list[tuple[AdapterName, SamplePhase, str, str]] = []
+    backend_id = manifest.correctness.backend_ops.id
+    coordinates.append(
+        (
+            "backend-ops",
+            "correctness-backend",
+            backend_id,
+            f"{backend_ops.EVIDENCE_ROOT}/{backend_id}/sample.json",
+        )
+    )
+    greedy = manifest.correctness.greedy
+    for prompt in greedy.prompts:
+        case_id = suite_greedy_case_id(greedy.id, prompt.id)
+        coordinates.append(
+            (
+                "llama-server",
+                "correctness-greedy",
+                case_id,
+                f"{llama_server.EVIDENCE_ROOT}/{case_id}/sample.json",
+            )
+        )
+    for planned in planned_cases:
+        case_id = planned.adapter_case_id
+        coordinates.append(
+            (
+                "llama-bench",
+                planned.phase,
+                case_id,
+                f"{llama_bench.EVIDENCE_ROOT}/{case_id}/sample.json",
+            )
+        )
+    return tuple(coordinates)
+
+
+def _bind_result_to_manifest(result: SuiteResultV1, manifest: SuiteManifestV1) -> None:
+    """Require a canonical result to be a passed, complete projection of its manifest."""
+
+    if (
+        result.suite_id != manifest.id
+        or result.machine_id != manifest.machine
+        or result.model_id != manifest.model
+    ):
+        raise SuiteError("suite result identities do not match the resolved manifest")
+    if result.status != "passed" or result.reason != "passed":
+        raise SuiteError("suite result is not a passed run")
+    if result.backend_ops is None or not result.backend_ops.passed:
+        raise SuiteError("suite result has no passing backend-ops projection")
+    if result.greedy is None or not result.greedy.passed:
+        raise SuiteError("suite result has no passing greedy projection")
+    if len(result.greedy.prompts) != len(manifest.correctness.greedy.prompts):
+        raise SuiteError("greedy projection does not cover every manifest prompt")
+    performance = manifest.performance
+    schedule = result.schedule
+    planned_warmups = len(performance.cases) * performance.warmup_runs
+    planned_measurements = len(performance.cases) * performance.measurement_windows
+    if (
+        schedule.protocol != performance.protocol
+        or schedule.planned_warmups != planned_warmups
+        or schedule.planned_measurements != planned_measurements
+        or schedule.completed_warmups != planned_warmups
+        or schedule.completed_measurements != planned_measurements
+    ):
+        raise SuiteError("suite result schedule does not match the manifest or is incomplete")
+
+
+def _bind_input_snapshots(
+    record: Path,
+    entries: dict[str, PortableEvidenceV1],
+    manifest: SuiteManifestV1,
+    result: SuiteResultV1,
+) -> _AuthenticatedInputs:
+    """Authenticate the three input snapshots and bind them to the result fields."""
+
+    if len(result.inputs) != len(_INPUT_SNAPSHOT_SPECS):
+        raise SuiteError("suite result does not carry exactly the three input snapshots")
+    parsed: dict[str, BaseModel] = {}
+    digests: dict[str, str] = {}
+    for ref, (logical_path, role, model_type) in zip(
+        result.inputs, _INPUT_SNAPSHOT_SPECS, strict=True
+    ):
+        if ref.logical_path != logical_path or ref.role != role:
+            raise SuiteError("suite result input reference is misbound")
+        entry, content = _snapshot_blob(record, entries, logical_path)
+        if entry.role != role or entry.media_type != "application/json":
+            raise SuiteError(f"input snapshot has the wrong role or media type: {logical_path}")
+        if entry.blob_sha256 != ref.sha256:
+            raise SuiteError(f"input reference digest diverged from its blob: {logical_path}")
+        parsed[logical_path] = _parse_canonical_json(
+            content,
+            model_type,
+            validation_error=f"input snapshot failed strict validation: {logical_path}",
+            canonical_error=f"input snapshot is not canonical: {logical_path}",
+        )
+        digests[logical_path] = entry.blob_sha256
+
+    build = cast(_BuildInputSnapshotV1, parsed["suite/build.json"])
+    model = cast(_ModelInputSnapshotV1, parsed["suite/model.json"])
+    machine = cast(_MachineInputSnapshotV1, parsed["suite/machine.json"])
+    return _authenticate_input_models(
+        build,
+        model,
+        machine,
+        manifest,
+        result,
+        model_sha256=digests["suite/model.json"],
+        machine_sha256=digests["suite/machine.json"],
+    )
+
+
+def _authenticate_input_models(
+    build: _BuildInputSnapshotV1,
+    model: _ModelInputSnapshotV1,
+    machine: _MachineInputSnapshotV1,
+    manifest: SuiteManifestV1,
+    result: SuiteResultV1,
+    *,
+    model_sha256: str,
+    machine_sha256: str,
+) -> _AuthenticatedInputs:
+    """Recompute embedded identities after strict canonical snapshot parsing."""
+
+    _validate_suite_input_eligibility(build.canonical, manifest, model.evidence)
+    canonical_digest = (
+        "record-sha256:"
+        + hashlib.sha256(canonical_json_bytes(build.canonical.model_dump(mode="json"))).hexdigest()
+    )
+    if (
+        build.build_id != result.build_id
+        or build.canonical.build_id != build.build_id
+        or build.canonical_record_sha256 != result.canonical_record_sha256
+        or build.canonical_record_sha256 != canonical_digest
+    ):
+        raise SuiteError("build snapshot does not authenticate the result build identity")
+    if (
+        model.model_id != result.model_id
+        or model.evidence.manifest_id != model.model_id
+        or model.model_receipt_sha256 != receipt_evidence_digest(model.evidence)
+    ):
+        raise SuiteError("model snapshot does not authenticate the result model identity")
+    profile_digest = hashlib.sha256(
+        canonical_json_bytes(machine.profile.model_dump(mode="json"))
+    ).hexdigest()
+    if (
+        machine.machine_id != result.machine_id
+        or machine.profile.id != machine.machine_id
+        or machine.profile_sha256 != profile_digest
+    ):
+        raise SuiteError("machine snapshot does not authenticate the result machine identity")
+    return _AuthenticatedInputs(
+        build=build,
+        model=model,
+        machine=machine,
+        model_sha256=model_sha256,
+        machine_sha256=machine_sha256,
+    )
+
+
+def _reauthenticate_samples(
+    record: Path,
+    entries: dict[str, PortableEvidenceV1],
+    manifest: SuiteManifestV1,
+    result: SuiteResultV1,
+    inputs: _AuthenticatedInputs,
+) -> None:
+    """Recompute every correctness and measurement projection from terminal samples.
+
+    Requires ``result.samples`` to be the exact ordered schedule of a passed run, each
+    reference to authenticate against its portable blob, and every backend-gate, greedy
+    token, and measurement projection to recompute exactly from the authenticated
+    terminal sample. A canonical result that claims a pass its terminal evidence does not
+    support fails closed.
+    """
+
+    planned_cases = plan_performance(manifest.performance)
+    expected = _expected_sample_coordinates(manifest, planned_cases)
+    if len(result.samples) != len(expected):
+        raise SuiteError("suite result sample set is not the exact passed-run schedule")
+    parsed: list[BaseModel] = []
+    for reference, (adapter, phase, case_id, logical_path) in zip(
+        result.samples, expected, strict=True
+    ):
+        if (
+            reference.adapter != adapter
+            or reference.phase != phase
+            or reference.case_id != case_id
+            or reference.logical_path != logical_path
+        ):
+            raise SuiteError("suite result sample ordering is inauthentic")
+        entry, content = _snapshot_blob(record, entries, logical_path)
+        expected_role = "correctness" if adapter == "backend-ops" else "samples"
+        if entry.role != expected_role or entry.media_type != "application/json":
+            raise SuiteError(f"sample has the wrong role or media type: {logical_path}")
+        if entry.blob_sha256 != reference.sample_sha256:
+            raise SuiteError(f"sample reference digest is inauthentic: {logical_path}")
+        sample = _parse_canonical_json(
+            content,
+            _SAMPLE_MODELS[adapter],
+            validation_error=f"portable sample failed strict validation: {logical_path}",
+            canonical_error=f"portable sample is not canonical: {logical_path}",
+        )
+        status, category = _sample_status_category(adapter, sample)
+        if reference.adapter_status != status:
+            raise SuiteError(f"sample status diverged from its reference: {logical_path}")
+        if reference.category != category:
+            raise SuiteError(f"sample category diverged from its reference: {logical_path}")
+        parsed.append(sample)
+
+    _bind_sample_contracts(manifest, inputs, parsed, planned_cases)
+    _reauthenticate_backend(result, parsed[0])
+    greedy = manifest.correctness.greedy
+    for index, prompt in enumerate(greedy.prompts):
+        _reauthenticate_greedy(result, index, prompt.id, parsed[1 + index])
+    _reauthenticate_measurements(manifest, result, parsed, planned_cases)
+
+
+def _bind_sample_contracts(
+    manifest: SuiteManifestV1,
+    inputs: _AuthenticatedInputs,
+    parsed: list[BaseModel],
+    planned_cases: tuple[PlannedCase, ...],
+) -> None:
+    """Bind every typed adapter case and input projection to authenticated suite inputs."""
+
+    backend = cast(BackendOpsSampleV1, parsed[0])
+    if _backend_category(backend.status) != "success":
+        raise SuiteError("passed suite contains a non-success backend-ops sample")
+    if backend.case != _backend_case(manifest):
+        raise SuiteError("backend-ops sample case diverged from the suite manifest")
+    _bind_adapter_sample_inputs(
+        backend.inputs, manifest, inputs, target_name=TARGET_BACKEND_OPS, model_bound=False
+    )
+
+    offset = 1
+    for prompt in manifest.correctness.greedy.prompts:
+        server = cast(LlamaServerSampleV1, parsed[offset])
+        offset += 1
+        if _server_category(server.status) != "success":
+            raise SuiteError("passed suite contains a non-success llama-server sample")
+        if server.case != _server_case(manifest, prompt.id):
+            raise SuiteError("llama-server sample case diverged from the suite manifest")
+        _bind_adapter_sample_inputs(
+            server.inputs, manifest, inputs, target_name=TARGET_LLAMA_SERVER, model_bound=True
+        )
+
+    for planned in planned_cases:
+        bench = cast(LlamaBenchSampleV1, parsed[offset])
+        offset += 1
+        if _bench_category(bench.status, bench.reason) != "success":
+            raise SuiteError("passed suite contains a non-success llama-bench sample")
+        if bench.case != _bench_case(planned):
+            raise SuiteError("llama-bench sample case diverged from the suite manifest")
+        _bind_adapter_sample_inputs(
+            bench.inputs, manifest, inputs, target_name=TARGET_LLAMA_BENCH, model_bound=True
+        )
+
+
+def _bind_adapter_sample_inputs(
+    value: BackendOpsInputsV1 | LlamaServerInputsV1 | LlamaBenchInputsV1,
+    manifest: SuiteManifestV1,
+    inputs: _AuthenticatedInputs,
+    *,
+    target_name: str,
+    model_bound: bool,
+) -> None:
+    """Bind an adapter input projection to build/model snapshots and target inventory."""
+
+    relative_path, binary_sha256 = _resolve_target_artifact(
+        inputs.build.canonical.artifacts, target_name
+    )
+    binary_parts = PurePosixPath(value.binary_path).parts
+    relative_parts = PurePosixPath(relative_path).parts
+    if (
+        value.build_id != inputs.build.build_id
+        or value.source_commit != manifest.build.source_commit
+        or value.binary_sha256 != binary_sha256
+        or binary_parts[-len(relative_parts) :] != relative_parts
+    ):
+        raise SuiteError("adapter sample inputs diverged from authenticated build evidence")
+    if not model_bound:
+        return
+    model_value = cast(LlamaServerInputsV1 | LlamaBenchInputsV1, value)
+    evidence = inputs.model.evidence
+    if (
+        model_value.model_id != inputs.model.model_id
+        or model_value.model_path != evidence.primary_local_path
+        or model_value.model_sha256 != evidence.primary_sha256
+        or model_value.model_receipt_sha256 != inputs.model.model_receipt_sha256
+        or model_value.model_receipt_evidence != evidence
+    ):
+        raise SuiteError("adapter sample inputs diverged from authenticated model evidence")
+
+
+def _sample_status_category(adapter: AdapterName, sample: BaseModel) -> tuple[str, SuiteCategory]:
+    """Return one authenticated adapter sample's status and its closed suite category."""
+
+    if adapter == "backend-ops":
+        backend = cast(BackendOpsSampleV1, sample)
+        return backend.status, _backend_category(backend.status)
+    if adapter == "llama-server":
+        server = cast(LlamaServerSampleV1, sample)
+        return server.status, _server_category(server.status)
+    bench = cast(LlamaBenchSampleV1, sample)
+    return bench.status, _bench_category(bench.status, bench.reason)
+
+
+def _reauthenticate_backend(result: SuiteResultV1, sample: BaseModel) -> None:
+    backend_sample = cast(BackendOpsSampleV1, sample)
+    verdict = result.backend_ops
+    assert verdict is not None  # bound by _bind_result_to_manifest
+    gate = backend_sample.gate
+    gate_passed = gate is not None and gate.passed
+    passed = _backend_category(backend_sample.status) == "success" and gate_passed
+    if (
+        verdict.sample != result.samples[0]
+        or verdict.gate_passed != gate_passed
+        or verdict.passed != passed
+        or not passed
+    ):
+        raise SuiteError("backend-ops projection diverged from its authenticated sample")
+
+
+def _reauthenticate_greedy(
+    result: SuiteResultV1, index: int, prompt_id: str, sample: BaseModel
+) -> None:
+    server_sample = cast(LlamaServerSampleV1, sample)
+    greedy = result.greedy
+    assert greedy is not None  # bound by _bind_result_to_manifest
+    if index >= len(greedy.prompts):
+        raise SuiteError("greedy projection is missing a prompt verdict")
+    stored = greedy.prompts[index]
+    reference = result.samples[1 + index]
+    recomputed = _greedy_prompt_verdict(
+        prompt_id, reference, server_sample, _server_category(server_sample.status)
+    )
+    if stored != recomputed or not stored.passed:
+        raise SuiteError("greedy projection diverged from its authenticated sample")
+
+
+def _reauthenticate_measurements(
+    manifest: SuiteManifestV1,
+    result: SuiteResultV1,
+    parsed: list[BaseModel],
+    planned_cases: tuple[PlannedCase, ...],
+) -> None:
+    performance = manifest.performance
+    reps = performance.repetitions_per_window
+    bench_start = 1 + len(manifest.correctness.greedy.prompts)
+    projections = result.measurements
+    projection_index = 0
+    for offset, planned in enumerate(planned_cases):
+        if planned.phase != "measurement":
+            continue
+        if projection_index >= len(projections):
+            raise SuiteError("suite result is missing a measurement projection")
+        projection = projections[projection_index]
+        projection_index += 1
+        reference = result.samples[bench_start + offset]
+        bench_sample = cast(LlamaBenchSampleV1, parsed[bench_start + offset])
+        measurement = bench_sample.measurement
+        if measurement is None:
+            raise SuiteError("measurement sample carries no measurement")
+        if (
+            projection.case_id != planned.case.id
+            or projection.window != planned.index
+            or projection.adapter_case_id != planned.adapter_case_id
+            or projection.sample != reference
+            or projection.avg_ts != measurement.avg_ts
+            or projection.stddev_ts != measurement.stddev_ts
+            or tuple(projection.samples_ts) != tuple(measurement.samples_ts)
+            or len(projection.samples_ts) != reps
+        ):
+            raise SuiteError("measurement projection diverged from its authenticated sample")
+    if projection_index != len(projections):
+        raise SuiteError("suite result carries an unexpected measurement projection")
+
+
+def _measurement_coordinates(
+    manifest: SuiteManifestV1, result: SuiteResultV1
+) -> dict[str, tuple[float, ...]]:
+    """Flatten measurements into ordered per-case samples keyed by manifest case id.
+
+    Requires exactly one measurement projection per ``(case_id, window)`` coordinate over
+    the manifest's declared cases and windows, each carrying ``repetitions_per_window``
+    samples, and folds them into a per-case sequence in ``(window, repetition_index)``
+    order. Duplicate or missing coordinates and incidental cases fail closed.
+    """
+
+    performance = manifest.performance
+    windows = performance.measurement_windows
+    reps = performance.repetitions_per_window
+    case_order = tuple(case.id for case in performance.cases)
+    by_case: dict[str, dict[int, tuple[float, ...]]] = {}
+    for projection in result.measurements:
+        windows_map = by_case.setdefault(projection.case_id, {})
+        if projection.window in windows_map:
+            raise SuiteError("duplicate measurement coordinate")
+        windows_map[projection.window] = tuple(projection.samples_ts)
+    if set(by_case) != set(case_order):
+        raise SuiteError("measurement projections reference unexpected cases")
+    coordinates: dict[str, tuple[float, ...]] = {}
+    for case_id in case_order:
+        windows_map = by_case[case_id]
+        if set(windows_map) != set(range(1, windows + 1)):
+            raise SuiteError("measurement coordinates do not cover the planned windows")
+        flat: list[float] = []
+        for window in range(1, windows + 1):
+            samples = windows_map[window]
+            if len(samples) != reps:
+                raise SuiteError("measurement coordinate has the wrong repetition count")
+            flat.extend(samples)
+        coordinates[case_id] = tuple(flat)
+    return coordinates
+
+
+def load_finalized_suite_snapshot(run_id: str, *, home: Path) -> FinalizedSuiteSnapshot:
+    """Load and fully re-authenticate one finalized, successful smoke-suite run.
+
+    Inspects the run (requiring ``RunOutcome.SUCCESS`` and retaining the authenticated
+    record digest), then reads and rebinds — through descriptor-anchored, no-follow,
+    content-addressed reads — the resolved manifest, the ``suite/result.json`` summary,
+    the three input snapshots, and every correctness and measurement sample, recomputing
+    each stored projection from the authenticated terminal samples. Every failure —
+    inauthentic bytes, a non-successful outcome, or a canonical-but-misbound record — is
+    raised as :class:`SuiteError`; the caller maps it to its own load-failure taxonomy.
+    """
+
+    inspection = inspect_run(run_id, home=home)
+    if inspection.outcome is not RunOutcome.SUCCESS:
+        raise SuiteError("finalized run did not finish successfully")
+    record = inspection.record
+
+    resolved_bytes = read_record_member(record, "manifest.resolved.yaml")
+    try:
+        manifest = validate_manifest("suite", yaml.safe_load(resolved_bytes))
+    except (ValidationError, ValueError, yaml.YAMLError) as exc:
+        raise SuiteError("resolved manifest failed strict suite validation") from exc
+    if not isinstance(manifest, SuiteManifestV1):
+        raise SuiteError("resolved manifest is not a suite manifest")
+    if canonical_yaml_bytes(manifest.model_dump(mode="json")) != resolved_bytes:
+        raise SuiteError("resolved manifest bytes are not canonical")
+
+    entries_list = list_portable_entries(record)
+    entries = {entry.logical_path: entry for entry in entries_list}
+    if len(entries) != len(entries_list):
+        raise SuiteError("finalized run has duplicate portable logical paths")
+
+    result_entry, result_bytes = _snapshot_blob(record, entries, "suite/result.json")
+    if result_entry.role != "summary" or result_entry.media_type != "application/json":
+        raise SuiteError("suite result entry has the wrong role or media type")
+    result = _parse_canonical_json(
+        result_bytes,
+        SuiteResultV1,
+        validation_error="suite result failed strict validation",
+        canonical_error="suite result bytes are not canonical",
+    )
+
+    _bind_result_to_manifest(result, manifest)
+    inputs = _bind_input_snapshots(record, entries, manifest, result)
+    _reauthenticate_samples(record, entries, manifest, result, inputs)
+    coordinates = _measurement_coordinates(manifest, result)
+
+    return FinalizedSuiteSnapshot(
+        run_id=inspection.run_id,
+        record=record,
+        record_sha256=inspection.record_sha256,
+        resolved_manifest_bytes=resolved_bytes,
+        resolved_manifest_sha256=hashlib.sha256(resolved_bytes).hexdigest(),
+        manifest=manifest,
+        result=result,
+        result_sha256=result_entry.blob_sha256,
+        build_id=result.build_id,
+        build_record_sha256=result.canonical_record_sha256,
+        model_input_sha256=inputs.model_sha256,
+        machine_input_sha256=inputs.machine_sha256,
+        case_order=tuple(case.id for case in manifest.performance.cases),
+        measurement_windows=manifest.performance.measurement_windows,
+        repetitions_per_window=manifest.performance.repetitions_per_window,
+        case_samples=coordinates,
+    )

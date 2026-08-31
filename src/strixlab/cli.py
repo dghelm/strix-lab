@@ -31,6 +31,7 @@ from strixlab.doctor import (
 )
 from strixlab.evidence import RunError, RunOutcome, inspect_run
 from strixlab.git_boundary import GitBoundaryError, SshTrust
+from strixlab.judge import JudgeError, JudgeExecutionError, compare_runs
 from strixlab.manifests import (
     BuildProfileV1,
     MachineProfileV1,
@@ -479,6 +480,50 @@ def doctor(
             )
     _doctor_echo(f"report: {result.path}", context, err=True)
     raise typer.Exit(code=1)
+
+
+@app.command("compare")
+def compare(
+    baseline_run_id: Annotated[str, typer.Argument(help="Finalized baseline run ID.")],
+    candidate_run_id: Annotated[str, typer.Argument(help="Finalized candidate run ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Compare two finalized successful suite runs into one immutable comparison run.
+
+    Authenticates both arms offline, pairs their matched throughput samples conservatively,
+    and finalizes a comparison run carrying canonical JSON and Markdown reports. It never
+    touches hardware, reruns an adapter, or mutates either arm. A statistical regression,
+    mixed, or inconclusive verdict is still a successfully executed comparison run.
+    """
+
+    environ, context = _evidence_terminal_context()
+    try:
+        result = compare_runs(
+            baseline_run_id,
+            candidate_run_id,
+            home=resolve_home(home),
+            environ=environ,
+        )
+    except JudgeExecutionError as exc:
+        # A comparison run was allocated but no report could be published; surface it.
+        _evidence_echo(f"comparison: {exc.run_id}", context, err=True)
+        if exc.record is not None:
+            _evidence_echo(f"record: {exc.record}", context, err=True)
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except JudgeError as exc:
+        # A pre-allocation failure: no run was created, so reveal no comparison id.
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    _evidence_echo(f"comparison: {result.run_id}", context)
+    _evidence_echo(f"verdict: {result.report.overall_verdict}", context)
+    _evidence_echo(f"record: {result.record}", context)
 
 
 @run_app.command("inspect")
