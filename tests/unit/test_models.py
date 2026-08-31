@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _model_fixtures import patch_lease_source
 
 from strixlab import models
 from strixlab.manifests import (
@@ -32,13 +33,16 @@ from strixlab.models import (
     ModelInspectorError,
     ModelManifestError,
     ModelMetadataError,
+    ModelReceiptV1,
     ModelSidecarError,
     inspect_local_gguf,
     lease_verified_model,
     load_model_receipt,
     manifest_digest,
     receipt_evidence_digest,
+    receipt_registry_sha256,
     require_current_model,
+    verify_model_at_source,
     verify_registered_model,
 )
 
@@ -125,6 +129,7 @@ class Harness:
     home: Path
     lease: FakeLease
     inspector: GgufInspectorBindingV1
+    interpreter: Path
 
 
 @pytest.fixture
@@ -140,7 +145,9 @@ def harness(tmp_path: Path) -> Harness:
         script_sha=script_sha,
         gguf_py_rel=gguf_py_rel,
     )
-    return Harness(home=home, lease=FakeLease(worktree=worktree), inspector=inspector)
+    return Harness(
+        home=home, lease=FakeLease(worktree=worktree), inspector=inspector, interpreter=python
+    )
 
 
 def _model_file(root: Path, name: str = "model.gguf") -> Path:
@@ -272,6 +279,32 @@ def test_real_and_synthetic_metadata_agree(harness: Harness, tmp_path: Path) -> 
     assert projection["metadata"]["general.architecture"] == {"type": "STRING", "value": "qwen35"}
     assert projection["metadata"]["qwen35.tiny_list"] == {"type": "ARRAY", "array_types": ["INT32"]}
     assert "filename" not in projection and "index" not in json.dumps(projection)
+
+
+def test_absolute_metadata_paths_are_redacted_from_the_portable_projection(
+    harness: Harness, tmp_path: Path
+) -> None:
+    metadata = json.loads(DUMP_FIXTURE.read_bytes())["metadata"]
+    metadata["quantize.imatrix.dataset"] = {
+        "index": 99,
+        "type": "STRING",
+        "offset": 999,
+        "value": "/training/calibration.txt",
+    }
+    _install_stub(harness, tmp_path, _dump_with(metadata=metadata))
+    model_path = _model_file(tmp_path)
+
+    observation = inspect_local_gguf(
+        model_path, inspector=harness.inspector, source_lease=harness.lease, home=harness.home
+    )
+
+    stored = (harness.home / observation.metadata.metadata_registry_path).read_bytes()
+    projection = json.loads(stored)
+    assert projection["metadata"]["quantize.imatrix.dataset"] == {
+        "type": "STRING",
+        "value": {"kind": "redacted-absolute-path"},
+    }
+    assert b"/training/calibration.txt" not in stored
 
 
 # --- Stub helpers for failure modes -------------------------------------------
@@ -512,13 +545,39 @@ def test_inspector_malformed_shape_fails(harness: Harness, tmp_path: Path) -> No
         )
 
 
-def test_inspector_absolute_path_string_rejected(harness: Harness, tmp_path: Path) -> None:
+def test_inspector_absolute_path_outside_scalar_value_is_rejected(
+    harness: Harness, tmp_path: Path
+) -> None:
     _install_stub(
         harness,
         tmp_path,
-        b'{"endian":"LITTLE","metadata":{"k":{"type":"STRING","value":"/etc/passwd"}},"tensors":{}}',
+        b'{"endian":"LITTLE","metadata":{"k":{"type":"/etc/passwd","value":"safe"}},"tensors":{}}',
     )
     model_path = _model_file(tmp_path)
+    with pytest.raises(ModelMetadataError):
+        inspect_local_gguf(
+            model_path, inspector=harness.inspector, source_lease=harness.lease, home=harness.home
+        )
+
+
+@pytest.mark.parametrize(
+    ("metadata", "tensors"),
+    [
+        ({"/private/metadata": {"type": "STRING", "value": "safe"}}, {}),
+        ({}, {"/private/tensor": {"shape": [1], "type": "F32"}}),
+        ({"safe": {"type": "OBJECT", "value": {"/private/nested": "safe"}}}, {}),
+    ],
+    ids=("metadata-key", "tensor-name", "nested-key"),
+)
+def test_inspector_absolute_path_mapping_keys_are_rejected(
+    harness: Harness,
+    tmp_path: Path,
+    metadata: dict[str, Any],
+    tensors: dict[str, Any],
+) -> None:
+    _install_stub(harness, tmp_path, _dump_with(metadata=metadata, tensors=tensors))
+    model_path = _model_file(tmp_path)
+
     with pytest.raises(ModelMetadataError):
         inspect_local_gguf(
             model_path, inspector=harness.inspector, source_lease=harness.lease, home=harness.home
@@ -1147,3 +1206,236 @@ def test_valid_multidimensional_tensor_shape_is_accepted(harness: Harness, tmp_p
         model_path, inspector=harness.inspector, source_lease=harness.lease, home=harness.home
     )
     assert observation.metadata.tensor_count == 1
+
+
+# --- Source-orchestrated verification (model verify seam) ---------------------
+
+
+def _verify_at_source(
+    monkeypatch: pytest.MonkeyPatch,
+    harness: Harness,
+    manifest: ModelManifestV1,
+    *,
+    lease: FakeLease | None = None,
+    interpreter: Path | None = None,
+) -> ModelReceiptV1:
+    patch_lease_source(monkeypatch, lease or harness.lease, expected_preparation_id=PREPARATION_ID)
+    return verify_model_at_source(
+        manifest,
+        PREPARATION_ID,
+        home=harness.home,
+        interpreter=interpreter or harness.interpreter,
+    )
+
+
+def test_verify_model_at_source_prints_receipt_run_suite_accepts(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    receipt = _verify_at_source(monkeypatch, harness, manifest)
+
+    assert receipt.trust_state == "verified"
+    digest = receipt_registry_sha256(receipt)
+    # The printed digest is exactly the receipts-registry content address that
+    # ``run suite`` re-authenticates via ``load_model_receipt``.
+    reloaded = load_model_receipt(manifest.id, digest, home=harness.home)
+    assert reloaded == receipt
+    # It is the envelope digest, never the portable-evidence digest.
+    assert digest != receipt_evidence_digest(receipt.evidence)
+
+
+def test_verify_model_at_source_repeats_the_same_receipt_identity(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    first = _verify_at_source(monkeypatch, harness, manifest)
+    second = _verify_at_source(monkeypatch, harness, manifest)
+    assert receipt_registry_sha256(first) == receipt_registry_sha256(second)
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+
+def test_verify_model_at_source_derives_the_lease_bound_inspector(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    receipt = _verify_at_source(monkeypatch, harness, manifest)
+    inspector = receipt.inspector
+    # Source identities come from the lease evidence; the interpreter is the resolved
+    # realpath of the injected stub; the script/root are the pinned relative paths.
+    assert inspector.preparation_id == PREPARATION_ID
+    assert inspector.candidate_id == CANDIDATE_ID
+    assert inspector.content_tree_id == CONTENT_TREE_ID
+    assert inspector.base_commit == ANCHOR
+    assert inspector.python_executable == str(harness.interpreter.resolve(strict=True))
+    assert inspector.script_relative_path == "gguf-py/gguf/scripts/gguf_dump.py"
+    assert inspector.gguf_py_relative_root == "gguf-py"
+
+
+def test_verify_model_at_source_preserves_symlinked_interpreter_invocation_path(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(harness.interpreter)
+
+    receipt = _verify_at_source(monkeypatch, harness, manifest, interpreter=interpreter)
+
+    assert receipt.inspector.python_executable == str(interpreter.absolute())
+    assert receipt.inspector.python_sha256 == _sha256_file(harness.interpreter)
+
+
+def test_verify_model_at_source_rejects_interpreter_symlink_swap_before_execution(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    interpreter = tmp_path / "venv" / "bin" / "python"
+    interpreter.parent.mkdir(parents=True)
+    interpreter.symlink_to(harness.interpreter)
+    marker = tmp_path / "unverified-interpreter-executed"
+    body = (
+        "from pathlib import Path\n"
+        f"invocation = Path({str(interpreter)!r})\n"
+        "invocation.unlink()\n"
+        f"invocation.symlink_to(Path({str(harness.interpreter)!r}))\n"
+        f"Path({str(marker)!r}).write_text('executed', encoding='ascii')\n"
+        "import sys\n"
+        f"sys.stdout.buffer.write({DUMP_FIXTURE.read_bytes()!r})\n"
+    )
+    alternate, _ = _make_python_stub(tmp_path, "alternate-python", body)
+    resolve_file_sha256 = models._resolve_file_sha256
+    swapped = False
+
+    def swap_after_model_hash(*args: Any, **kwargs: Any) -> str:
+        nonlocal swapped
+        digest = resolve_file_sha256(*args, **kwargs)
+        if not swapped:
+            interpreter.unlink()
+            interpreter.symlink_to(alternate)
+            swapped = True
+        return digest
+
+    monkeypatch.setattr(models, "_resolve_file_sha256", swap_after_model_hash)
+
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest, interpreter=interpreter)
+    assert not marker.exists()
+
+
+def test_verify_model_at_source_rejects_wrong_source_id(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    lease = FakeLease(worktree=harness.lease.worktree, evidence=FakeEvidence(source_id="other-src"))
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest, lease=lease)
+
+
+def test_verify_model_at_source_rejects_wrong_commit(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    lease = FakeLease(worktree=harness.lease.worktree, evidence=FakeEvidence(base_commit="0" * 40))
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest, lease=lease)
+
+
+def test_verify_model_at_source_rejects_missing_inspector_script(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    (harness.lease.worktree / "gguf-py" / "gguf" / "scripts" / "gguf_dump.py").unlink()
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest)
+
+
+def test_verify_model_at_source_rejects_symlinked_inspector_script(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    script = harness.lease.worktree / "gguf-py" / "gguf" / "scripts" / "gguf_dump.py"
+    target = tmp_path / "elsewhere.py"
+    target.write_text("# pinned inspector script placeholder\n", encoding="utf-8")
+    script.unlink()
+    script.symlink_to(target)
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest)
+
+
+def test_verify_model_at_source_rejects_unavailable_interpreter(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    with pytest.raises(ModelInspectorError):
+        _verify_at_source(monkeypatch, harness, manifest, interpreter=tmp_path / "no-such-python")
+
+
+def test_verify_model_at_source_rejects_missing_model_artifact(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _registered_manifest(model_path)
+    model_path.unlink()
+    with pytest.raises(ModelArtifactError):
+        _verify_at_source(monkeypatch, harness, manifest)
+
+
+def _with_artifact_file(manifest: ModelManifestV1, **file_overrides: Any) -> ModelManifestV1:
+    file = manifest.artifact.file.model_copy(update=file_overrides)
+    return manifest.model_copy(
+        update={"artifact": manifest.artifact.model_copy(update={"file": file})}
+    )
+
+
+def test_verify_model_at_source_rejects_size_mismatch(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _with_artifact_file(
+        _registered_manifest(model_path), size_bytes=model_path.stat().st_size + 1
+    )
+    with pytest.raises(ModelArtifactError):
+        _verify_at_source(monkeypatch, harness, manifest)
+
+
+def test_verify_model_at_source_rejects_sha256_mismatch(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model_path = _model_file(tmp_path)
+    manifest = _with_artifact_file(_registered_manifest(model_path), sha256="0" * 64)
+    with pytest.raises(ModelArtifactError):
+        _verify_at_source(monkeypatch, harness, manifest)
+
+
+def test_verify_model_at_source_refuses_a_draft_manifest(
+    harness: Harness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    draft = ModelManifestV1(
+        schema_version=1,
+        id="qwen38-27b",
+        registry_status="draft",
+        artifact=ModelArtifactV1(format="gguf", file=ModelFileIdentityV1()),
+        quantization=ModelQuantizationV1(
+            format_family="unknown",
+            storage_format="gguf",
+            tensor_policy_id="unknown",
+            tensor_policy_source="unknown",
+            calibration_method="unknown",
+            calibration_source="unknown",
+            calibration_hash="unknown",
+        ),
+        execution=ModelExecutionV1(verification_status="unverified"),
+        draft_reason="no reviewed conversion recipe is pinned yet",
+    )
+    with pytest.raises(ModelManifestError):
+        _verify_at_source(monkeypatch, harness, draft)

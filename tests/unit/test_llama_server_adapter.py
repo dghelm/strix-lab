@@ -82,7 +82,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 if "--version" in sys.argv:
-    sys.stderr.write("version: 0.3.0-dev (build 1, commit ca94157)\\n")
+    sys.stderr.write(
+        "version: 0.3.0-dev "
+        "(build 0, commit ca94157f70a2776e8da6b6849b50b45a083d0478)\\n"
+    )
     sys.stderr.write("built with tests for Linux x86_64\\n")
     raise SystemExit(0)
 if "--help" in sys.argv:
@@ -317,7 +320,7 @@ def test_pinned_capability_fixtures() -> None:
         (FIXTURES / "help.stdout.txt").read_text(encoding="utf-8"),
         toolchain=toolchain,
     )
-    assert capabilities.short_commit == "ca94157"
+    assert capabilities.commit == "ca94157f70a2776e8da6b6849b50b45a083d0478"
     assert capabilities.required_options == (
         "model",
         "host",

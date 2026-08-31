@@ -1,0 +1,42 @@
+schema_version: 1
+id: hip-rocm-gfx1151
+source: strix-llama
+generator: Ninja
+build_type: Release
+toolchain:
+  mode: rocm
+  prefixes:
+    system: /usr
+    rocm: /opt/rocm
+  cmake: /usr/bin/cmake
+  ninja: /usr/bin/ninja
+  c_compiler: /opt/rocm/bin/amdclang
+  cxx_compiler: /opt/rocm/bin/amdclang++
+  hip_compiler: /opt/rocm/bin/amdclang++
+  rocm_prefix: /opt/rocm
+  path:
+    - /opt/rocm/bin
+    - /usr/bin
+execution:
+  jobs: 8
+  timeouts:
+    discovery_seconds: 30.0
+    configure_seconds: 300.0
+    build_seconds: 1800.0
+    inspection_seconds: 30.0
+    capability_seconds: 30.0
+environment:
+  path_lists:
+    ROCM_PATH: /opt/rocm
+  literals:
+    SOURCE_DATE_EPOCH: "0"
+cmake:
+  GGML_HIP: true
+  AMDGPU_TARGETS: gfx1151
+  GGML_NATIVE: false
+  BUILD_SHARED_LIBS: false
+  CMAKE_HIP_COMPILER_ROCM_ROOT: /opt/rocm
+targets:
+  - llama-bench
+  - llama-server
+  - test-backend-ops
