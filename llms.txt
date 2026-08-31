@@ -32,22 +32,49 @@ uv run pytest --cov=strixlab --cov-report=term-missing --cov-fail-under=90
 uv build
 ```
 
-## Provisioned smoke suite (real Strix Halo only)
+## Self-service smoke suite (real Strix Halo only)
 
-Requires an operator-provisioned build ID and a machine-local verified model
-receipt SHA-256; there is no self-service command that produces them yet.
-Replace every `<...>` placeholder before running — angle brackets are shell
-redirection syntax, so this block is illustrative, not directly pasteable:
+Prerequisites: ROCm at `/opt/rocm`, the pinned GGUF kept outside the repository,
+and a credential-clean shell. StrixLab does not download weights. Set `MODELS`
+so the file declared by `configs/models/qwen35-4b-smoke.yaml` exists at
+`$MODELS/qwen35-4b/Qwen_Qwen3.5-4B-Q4_K_M.gguf` with the declared size and
+SHA-256.
+
+Run in this order. Source and build preparation print their IDs on the first
+line, model verification prints only the receipt digest, and the suite prints
+its ID after `run:`. Copy only the ID or digest—not a label—into the following
+assignment instead of using the literal `...`.
 
 ```bash
+export MODELS=/absolute/path/to/model-root
+uv run strixlab doctor --machine configs/machines/strix-halo-128g.yaml
+
+uv run strixlab source prepare configs/sources/strix-llama.yaml
+PREPARATION_ID='prep-strix-llama-...'
+
+uv run strixlab build prepare "$PREPARATION_ID" \
+  configs/builds/hip-rocm-gfx1151.yaml
+BUILD_ID='build-sha256:...'
+
+uv run strixlab model verify configs/models/qwen35-4b-smoke.yaml \
+  --source "$PREPARATION_ID"
+MODEL_RECEIPT_SHA256='...'
+
 uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
   --machine configs/machines/strix-halo-128g.yaml \
-  --build <BUILD_ID> \
-  --model-receipt <MODEL_RECEIPT_SHA256>
-uv run strixlab run inspect <RUN_ID>
-uv run strixlab bundle export <RUN_ID> <NEW_BUNDLE_DIRECTORY>
-uv run strixlab bundle verify <NEW_BUNDLE_DIRECTORY>
+  --build "$BUILD_ID" \
+  --model-receipt "$MODEL_RECEIPT_SHA256"
+RUN_ID='run-...'
+
+uv run strixlab run inspect "$RUN_ID"
+uv run strixlab bundle export "$RUN_ID" "../strixlab-bundle-$RUN_ID"
+uv run strixlab bundle verify "../strixlab-bundle-$RUN_ID"
 ```
+
+Do not work around a failed correctness gate or claim a performance result from
+an incomplete run. Report the failure or friction exactly, with secrets and
+identifying paths redacted. A successful run is still a provisional field
+observation, not an official score or optimization win.
 
 ## Field reports
 
