@@ -7,10 +7,15 @@ model tests use this to exercise verified-model wiring without a real GGUF or gg
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import itertools
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from strixlab import models
 from strixlab.manifests import (
@@ -52,6 +57,23 @@ class FakeLease:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def patch_lease_source(
+    monkeypatch: pytest.MonkeyPatch, lease: Any, *, expected_preparation_id: str
+) -> None:
+    """Redirect ``verify_model_at_source``'s lazy ``lease_source`` to yield ``lease``.
+
+    The fake context manager asserts the caller leases exactly ``expected_preparation_id``
+    before yielding, so tests exercise the real orchestration without a Git worktree.
+    """
+
+    @contextlib.contextmanager
+    def fake_lease_source(preparation_id: str, *, home: Path) -> Iterator[Any]:
+        assert preparation_id == expected_preparation_id
+        yield lease
+
+    monkeypatch.setattr("strixlab.sources.lease_source", fake_lease_source)
 
 
 def build_verified_receipt(

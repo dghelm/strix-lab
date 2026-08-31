@@ -83,7 +83,10 @@ _REQUIRED_HELP_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?m)^-ngl,\s+--gpu-layers,\s+--n-gpu-layers\s+N\s+"),
     ),
 )
-_VERSION_RE = re.compile(r"^version: 0\.3\.0-dev \(build 1, commit ca94157\)$")
+_VERSION_RE = re.compile(
+    r"^version: 0\.3\.0-dev "
+    r"\(build 0, commit ca94157f70a2776e8da6b6849b50b45a083d0478\)$"
+)
 _SENTINEL_RE = re.compile(r"^[0-9a-f]{32}$")
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -178,8 +181,10 @@ class LlamaServerCapabilitiesV1(_Model):
     schema_version: Literal[1] = 1
     profile: Literal["ca94157-v1"] = PROFILE
     version: Literal["0.3.0-dev"] = "0.3.0-dev"
-    build: Literal[1] = 1
-    short_commit: Literal["ca94157"] = "ca94157"
+    build: Literal[0] = 0
+    commit: Literal["ca94157f70a2776e8da6b6849b50b45a083d0478"] = (
+        "ca94157f70a2776e8da6b6849b50b45a083d0478"
+    )
     toolchain: Annotated[StrictStr, Field(min_length=1, max_length=1024)]
     required_options: tuple[StrictStr, ...]
 

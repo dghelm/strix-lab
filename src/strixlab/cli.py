@@ -30,15 +30,21 @@ from strixlab.doctor import (
     run_doctor,
 )
 from strixlab.evidence import RunError, RunOutcome, inspect_run
-from strixlab.git_boundary import SshTrust
+from strixlab.git_boundary import GitBoundaryError, SshTrust
 from strixlab.manifests import (
     BuildProfileV1,
     MachineProfileV1,
     ManifestRegistry,
+    ModelManifestV1,
     SourceLockV1,
     SuiteManifestV1,
     resolve_and_validate_manifest,
     validate_manifest,
+)
+from strixlab.models import (
+    ModelError,
+    receipt_registry_sha256,
+    verify_model_at_source,
 )
 from strixlab.paths import resolve_home
 from strixlab.records import RecordError
@@ -76,14 +82,17 @@ source_app = typer.Typer(help="Prepare and manage isolated Git source worktrees.
 build_app = typer.Typer(help="Reproducibly build, inspect, and clean pinned source trees.")
 run_app = typer.Typer(help="Inspect finalized run-evidence records.")
 bundle_app = typer.Typer(help="Export and verify deterministic run-evidence bundles.")
+model_app = typer.Typer(help="Verify registered models against prepared sources.")
 app.add_typer(schema_app, name="schema")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(source_app, name="source")
 app.add_typer(build_app, name="build")
 app.add_typer(run_app, name="run")
 app.add_typer(bundle_app, name="bundle")
+app.add_typer(model_app, name="model")
 
 _EVIDENCE_DOMAIN_ERRORS = (OSError, ValueError, RunError, RecordError, BundleError)
+_MODEL_DOMAIN_ERRORS = (OSError, ValueError, ModelError, SourceError, GitBoundaryError)
 
 
 def _version_callback(value: bool) -> None:
@@ -633,6 +642,63 @@ def bundle_verify(
         "run_record_sha256": inspection.run_record_sha256,
     }
     _evidence_echo(canonical_json_bytes(payload).decode(), context, nl=False)
+
+
+@model_app.command("verify")
+def model_verify(
+    manifest: Annotated[
+        Path,
+        # No parser-level filesystem validation: a missing, unreadable, or directory path
+        # is surfaced by ``read_manifest`` inside the RedactionContext-protected body, so a
+        # secret-bearing path can never be echoed by Typer before the safety check runs.
+        typer.Argument(help="Versioned model-manifest YAML path."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Prepared source preparation ID."),
+    ],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Verify a registered model with the prepared source and print its receipt SHA-256.
+
+    Leases the prepared source, derives the pinned GGUF inspector binding from it, runs
+    the existing model verifier, and prints only the receipt SHA-256 that ``run suite``
+    accepts. It never downloads weights or exposes binding hashes or paths as arguments.
+    Every terminal line is verified secret-safe before it is written.
+    """
+
+    environ, context = _evidence_terminal_context()
+    try:
+        raw = read_manifest(manifest)
+        model = resolve_and_validate_manifest("model", raw, environ)
+        if not isinstance(model, ModelManifestV1):
+            raise TypeError("model registry returned the wrong model")
+    except ValidationError as exc:
+        _evidence_echo("invalid model manifest:", context, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _evidence_echo(f"  {location}: {error['msg']}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        _evidence_echo(
+            "invalid model manifest: sensitive environment interpolation is forbidden",
+            context,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        _evidence_echo(f"model verify failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        receipt = verify_model_at_source(model, source, home=resolve_home(home))
+    except _MODEL_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"model verify failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    _evidence_echo(receipt_registry_sha256(receipt), context)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

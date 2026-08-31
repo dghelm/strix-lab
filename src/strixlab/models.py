@@ -25,6 +25,7 @@ import math
 import os
 import re
 import stat
+import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -82,8 +83,10 @@ __all__ = [
     "load_model_receipt",
     "manifest_digest",
     "receipt_evidence_digest",
+    "receipt_registry_sha256",
     "require_current_model",
     "require_receipt_inputs_match",
+    "verify_model_at_source",
     "verify_registered_model",
 ]
 
@@ -218,8 +221,8 @@ class GgufInspectorBindingV1(_Model):
     candidate_id: Annotated[str, Field(pattern=r"^candidate-sha256:[0-9a-f]{64}$")]
     content_tree_id: Annotated[str, Field(pattern=r"^content-tree-sha256:[0-9a-f]{64}$")]
     base_commit: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
-    # The caller resolves the interpreter to an absolute realpath (``Path.resolve``) so
-    # verification can no-follow a regular file rather than chase a system symlink.
+    # Preserve the absolute invocation path so a virtual-environment interpreter keeps
+    # its environment semantics; verification resolves and hashes its live target.
     python_executable: AbsolutePathString
     python_sha256: Sha256Hex
     gguf_py_relative_root: _RelativePath
@@ -444,6 +447,20 @@ def require_receipt_inputs_match(
 
 def _receipt_envelope(receipt: ModelReceiptV1) -> tuple[bytes, str]:
     return _domain_digest(_RECEIPT_DOMAIN, receipt.model_dump(mode="json"))
+
+
+def receipt_registry_sha256(receipt: ModelReceiptV1) -> str:
+    """SHA-256 of the complete canonical receipt envelope: its local content address.
+
+    Equals the receipts-registry filename stem published by
+    :func:`verify_registered_model` and the ``--model-receipt`` value that
+    :func:`strixlab.suites.run_suite` re-authenticates via :func:`load_model_receipt`.
+    Distinct from :func:`receipt_evidence_digest`, which digests the portable evidence
+    projection embedded in adapter samples.
+    """
+
+    _, digest = _receipt_envelope(receipt)
+    return digest
 
 
 # --- Storage layout -----------------------------------------------------------
@@ -694,6 +711,18 @@ def _load_cache_record(
 # --- Inspector binding and execution ------------------------------------------
 
 
+def _interpreter_sha256(path: Path) -> str:
+    """Hash an interpreter's real executable while preserving its invocation path."""
+
+    try:
+        target = path.resolve(strict=True)
+    except OSError as exc:
+        raise ModelInspectorError(f"inspector interpreter is unavailable: {path}") from exc
+    return hash_executable(
+        target, error=ModelInspectorError, subject="inspector interpreter"
+    ).sha256
+
+
 @dataclass(frozen=True, slots=True)
 class _BoundInspector:
     binding: GgufInspectorBindingV1
@@ -704,10 +733,7 @@ class _BoundInspector:
 
     def verify(self) -> None:
         self.lease.verify()
-        interpreter = hash_executable(
-            self.python_executable, error=ModelInspectorError, subject="inspector interpreter"
-        )
-        if interpreter.sha256 != self.binding.python_sha256:
+        if _interpreter_sha256(self.python_executable) != self.binding.python_sha256:
             raise ModelInspectorError(f"digest mismatch for {self.python_executable}")
         _require_digest(
             self.script_path,
@@ -811,7 +837,7 @@ def _run_inspector(
         "--json",
     ]
     stdout_spool = scratch / "stdout.bin"
-    bound.lease.verify()
+    bound.verify()
     try:
         result = run_process(
             argv,
@@ -832,6 +858,7 @@ def _run_inspector(
             spool_root=scratch,
             pass_fds=(descriptor,),
         )
+        bound.verify()
         if result.outcome is ProcessOutcome.SPAWN_FAILED:
             raise ModelInspectorError("inspector process could not be spawned")
         if result.outcome is ProcessOutcome.TIMED_OUT:
@@ -921,6 +948,10 @@ class _NormalizedMetadata:
     key_count: int
 
 
+def _is_absolute_path_string(value: object) -> bool:
+    return isinstance(value, str) and value.startswith("/")
+
+
 def _normalize_metadata(dump: Mapping[str, Any]) -> _NormalizedMetadata:
     endian = dump.get("endian")
     if endian not in ("LITTLE", "BIG"):
@@ -945,7 +976,15 @@ def _normalize_metadata(dump: Mapping[str, Any]) -> _NormalizedMetadata:
                 raise ModelMetadataError(f"inspector array_types is malformed: {key}")
             metadata_map[key] = {"type": value_type, "array_types": list(array_types)}
         elif "value" in entry:
-            metadata_map[key] = {"type": value_type, "value": entry["value"]}
+            value = entry["value"]
+            # Real GGUFs commonly retain the quantizer's absolute input/dataset paths.
+            # They are provenance rather than compatibility inputs, and publishing them
+            # would violate the portable-metadata boundary. The exact inspector-output
+            # digest still binds the original bytes, while the normalized projection
+            # records only that an absolute path was present.
+            if _is_absolute_path_string(value):
+                value = {"kind": "redacted-absolute-path"}
+            metadata_map[key] = {"type": value_type, "value": value}
         else:
             raise ModelMetadataError(f"inspector metadata entry has neither value nor array: {key}")
 
@@ -987,10 +1026,11 @@ def _normalize_metadata(dump: Mapping[str, Any]) -> _NormalizedMetadata:
 
 def _reject_absolute_path_strings(value: Any) -> None:
     if isinstance(value, str):
-        if value.startswith("/"):
+        if _is_absolute_path_string(value):
             raise ModelMetadataError("normalized metadata contains an absolute path string")
     elif isinstance(value, dict):
-        for child in value.values():
+        for key, child in value.items():
+            _reject_absolute_path_strings(key)
             _reject_absolute_path_strings(child)
     elif isinstance(value, list):
         for child in value:
@@ -1229,6 +1269,71 @@ def verify_registered_model(
     bound.verify()
     _publish_receipt(home, receipt)
     return receipt
+
+
+def _default_inspector_interpreter() -> Path:
+    """The interpreter that runs the pinned inspector: this process's own Python."""
+
+    return Path(sys.executable)
+
+
+def _derive_inspector_binding(
+    source_lease: SourceLease, *, interpreter: Path
+) -> GgufInspectorBindingV1:
+    """Derive the pinned GGUF inspector binding from an authenticated source lease.
+
+    The source identities are read from the lease's published evidence, the interpreter
+    is made absolute without dereferencing it, its real executable target is hashed,
+    and the pinned ``gguf_dump.py`` is hashed at its exact relative path beneath the
+    leased worktree. Preserving the invocation path is required for virtual-environment
+    interpreters, whose executable is commonly a symlink and whose environment is
+    selected by that path. The binding records expectations only:
+    :func:`verify_registered_model` re-binds it and authoritatively rechecks the live
+    lease, source id, commit, interpreter, and script before any inspection runs, so
+    this helper duplicates none of that policy.
+    """
+
+    evidence = source_lease.evidence
+    invocation_path = interpreter.absolute()
+    interpreter_sha256 = _interpreter_sha256(invocation_path)
+    script_path = _resolve_within(
+        source_lease.worktree, GGUF_DUMP_RELATIVE_PATH, error=ModelInspectorError
+    )
+    _, script_sha256 = _hash_regular_file(script_path, executable=False, error=ModelInspectorError)
+    return GgufInspectorBindingV1(
+        preparation_id=evidence.preparation_id,
+        candidate_id=evidence.candidate_id,
+        content_tree_id=evidence.content_tree_id,
+        base_commit=evidence.base_commit,
+        python_executable=str(invocation_path),
+        python_sha256=interpreter_sha256,
+        gguf_py_relative_root=GGUF_PY_RELATIVE_ROOT,
+        script_relative_path=GGUF_DUMP_RELATIVE_PATH,
+        script_sha256=script_sha256,
+    )
+
+
+def verify_model_at_source(
+    manifest: ModelManifestV1,
+    preparation_id: str,
+    *,
+    home: Path,
+    interpreter: Path | None = None,
+) -> ModelReceiptV1:
+    """Lease the prepared source, derive its inspector binding, and verify the model.
+
+    Holds the authenticated :class:`~strixlab.sources.SourceLease` for ``preparation_id``
+    while deriving the pinned inspector binding from it and verifying ``manifest`` into a
+    published receipt. This is the source/model orchestration seam: it adds no
+    downloading, no user-facing binding arguments, and no duplicate verification logic.
+    """
+
+    from strixlab.sources import lease_source
+
+    resolved_interpreter = _default_inspector_interpreter() if interpreter is None else interpreter
+    with lease_source(preparation_id, home=home) as lease:
+        inspector = _derive_inspector_binding(lease, interpreter=resolved_interpreter)
+        return verify_registered_model(manifest, inspector=inspector, source_lease=lease, home=home)
 
 
 def _verify_sidecars(
