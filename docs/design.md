@@ -507,6 +507,37 @@ not a local model measurement, which requires a real gfx1151 build and model run
 executables exercise orchestration; parser conformance is pinned by the single-metric golden
 and upstream documentation fixture, and every fixture digest is locked by tests.
 
+## llama-server adapter v1
+
+The `llama-server` adapter is a ca94157-bound library boundary for one minimal
+two-request smoke case. It consumes a caller-verified `llama-server` artifact from
+a build with `LLAMA_BUILD_SERVER=ON`, checks exact `--version` and required
+`--help` option grammar, binds only IPv4 loopback, waits for the pinned `/health`
+loading/ready contract, and sends exactly two sequential non-streaming
+`POST /completion` requests. Each request uses greedy seeded decoding, disabled
+prompt-cache reuse, raw token return, and a fresh 128-bit sentinel in the prompt;
+each response must return its own sentinel and exclude the other request's sentinel.
+This proves request/response correlation, not absence of hidden model-state effects,
+and the random sentinel intentionally means token IDs need not repeat across runs.
+
+The long-lived child has explicit capability, readiness, per-request, and shutdown
+deadlines. Its stdout and stderr are continuously stream-hashed with bounded retained
+bytes; HTTP bodies are bounded before strict UTF-8/JSON parsing. Teardown polls before
+signalling, sends one SIGTERM only to a live child process group, escalates to SIGKILL
+after the shutdown deadline, reaps the child, and stops the nonblocking pipe collector.
+Binary and model file identities are rechecked across every child/request boundary and
+after shutdown. Integrity or evidence-boundary drift propagates without `sample.json`;
+ordinary capability, lifecycle, transport, response, isolation, capture, and shutdown
+failures produce terminal structured evidence. The adapter never finalizes the
+caller-owned `RunSession` and defines no load generator, suite, model registry, CLI,
+streaming client, retry policy, or generic service framework.
+
+Server evidence is deliberately complete-local rather than portable in v1: bounded
+malformed or non-UTF-8 response and process bytes must remain available for diagnosis,
+while the portable evidence policy admits only its closed text/structured media set.
+The adapter inventories each local artifact's digest and size; adding a binary-capable
+portable role is a later evidence-protocol decision, not an adapter-local exception.
+
 ## test-backend-ops adapter v1
 
 The `test-backend-ops` adapter is the correctness hard-gate runner adapter: a library

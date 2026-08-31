@@ -6,3 +6,4 @@
 *.jpeg binary
 *.gguf binary
 *.zst binary
+tests/fixtures/llama_server/ca94157/help.stdout.txt whitespace=-blank-at-eol
