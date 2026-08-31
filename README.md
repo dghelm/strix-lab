@@ -44,8 +44,8 @@ A clean checkout provides a strict, evidence-oriented CLI:
   outside the repository.
 - No upstream pull-request bot; StrixLab never pushes changes or opens PRs.
 
-Field reports (see below) are provisional observations, **not** judged
-submissions or official scores.
+Community experiments (see below) are locally executed, reviewable
+investigations—not remotely executed submissions or official scores.
 
 ## Requirements
 
@@ -167,20 +167,34 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
-- **Hardware field reports** — self-service smoke-suite observations,
-  including failures and inconclusive runs.
+- **Scenarios** — propose a stable benchmark question in an Issue, then add its
+  checked-in suite and supporting configs in a scenario PR.
+- **Experiments** — propose one reproducible candidate in a PR and collect
+  matched baseline/candidate replications from community GPU owners.
+- **Hardware field reports** — lightweight smoke-suite observations and setup
+  friction that do not yet constitute a candidate experiment.
 - **Docs and tests** — narrow clarifications and coverage.
 - **Narrow code contributions** — keep them small, evidence-oriented, and
   independently testable.
 
-To share an observation, copy the field-report template and open a pull request:
+The core vocabulary is intentionally small: a suite manifest defines a
+**scenario**; a **candidate** is the change being tested; a **run** is one local
+execution; a **replication** is one contributor's matched baseline and candidate
+attempt, plus a comparison when both pass correctness; and an **experiment** is
+the catalog entry that can collect many replications. Another person's rerun is
+a replication—not universal "validation."
 
+Start with the community workflow, then choose the matching GitHub template:
+
+- Workflow: [`docs/community-workflow.md`](docs/community-workflow.md)
+- Experiment catalog and template: [`experiments/`](experiments/)
 - Report template: [`field-reports/TEMPLATE.md`](field-reports/TEMPLATE.md)
-- Contribution policy and the field-report route: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Contribution policy: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Coding-agent execution contract: [`llms.txt`](llms.txt)
 
-Field reports carry small summaries, identifiers, digests, exact commands, and
-redacted excerpts only. Never commit model weights, raw StrixLab homes, private
+GitHub coordinates review and catalogs small summaries, identifiers, digests,
+commands, and redacted notes. Contributors execute candidate code only on
+machines they control. Never commit model weights, raw StrixLab homes, private
 data, credentials, or evidence bundles.
 
 ## License

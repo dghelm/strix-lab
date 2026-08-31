@@ -3,7 +3,8 @@
 StrixLab is pre-alpha, local, CLI-first research tooling for reproducible AMD
 Strix Halo optimization experiments. It orchestrates existing runtimes and
 isolated native builds and records immutable, verifiable run evidence. It is not
-an inference runtime, a leaderboard, a judge, or an upstream patch bot.
+an inference runtime, leaderboard, remote code-execution service, or upstream
+patch bot.
 
 ## Before changing code
 
@@ -97,6 +98,35 @@ explicit confirmation that no weights, credentials, private data, raw home, or
 bundle are included. Failed and inconclusive results are valuable and must be
 reported honestly.
 
+## Community experiments
+
+Read `docs/community-workflow.md` before proposing optimization work. Use these
+terms precisely:
+
+- scenario: the checked-in suite manifest and its resolved digest;
+- candidate: the reproducible change being evaluated;
+- run: one local baseline or candidate execution;
+- replication: one contributor's matched baseline and candidate attempt, plus
+  an offline comparison when both pass correctness;
+- experiment: one candidate under one scenario, with one checked-in catalog
+  record and potentially many replications.
+
+Propose a new scenario through an Issue before implementing it. Use a scenario
+PR for the suite/config contract and one experiment PR per candidate. An
+experiment PR may wait in draft form for a GPU owner; do not fabricate hardware
+results or replace the correctness gate with repository-only tests. Replications
+may be coordinated in PR comments, but accepted summaries must be copied into
+`experiments/<scenario-id>/<experiment-id>/README.md` before merge. A candidate
+correctness failure is a useful negative replication and must not be forced
+through comparison. Later replications use follow-up PRs against the same
+record.
+
+Do not call a rerun "validation": verification means checking evidence
+integrity, while replication is another observation. Do not call a candidate a
+solution or claim `best-known` unless maintainers have assigned that status for
+the exact scenario. A merged experiment is cataloged and reproducible, not
+universally faster or production-ready.
+
 ## Never commit or upload
 
 Model weights, raw StrixLab homes, private data, credentials, or evidence
@@ -106,5 +136,6 @@ commands, and redacted excerpts.
 ## Authorization boundaries
 
 Do not push, open a pull request, change any external repository, or claim a
-solution, score, or "win" without explicit human authorization. StrixLab reports
-are provisional observations, not judged submissions.
+solution, score, or "win" without explicit human authorization. StrixLab
+experiments are community-reviewed local observations, not remotely executed
+submissions.
