@@ -729,6 +729,221 @@ class _RawModelManifestV1(ManifestModel):
         return self
 
 
+# --- Suite manifest v1 --------------------------------------------------------
+
+# Aggregate bounds applied after per-field validation, before a run is allocated.
+SUITE_MAX_PROMPTS = 4
+SUITE_MAX_PERFORMANCE_CASES = 8
+SUITE_MAX_ADAPTER_INVOCATIONS = 128
+SUITE_MAX_BENCHMARK_REPETITIONS = 512
+SUITE_MAX_PROMPT_BYTES = 16 * 1024
+SUITE_MAX_PROMPT_AGGREGATE_BYTES = 32 * 1024
+# The backend/server/bench case-id length ceiling (their DashId plus the 64-byte cap).
+SUITE_ADAPTER_CASE_ID_MAX = 64
+_SUITE_TOKEN_MAX = 1_048_576
+
+
+def suite_warmup_case_id(index: int, case_id: str) -> str:
+    """The deterministic warmup adapter case id for one ordered warmup round."""
+
+    return f"warmup-{index:02d}-{case_id}"
+
+
+def suite_measurement_case_id(window: int, case_id: str) -> str:
+    """The deterministic measurement adapter case id for one ordered window."""
+
+    return f"measure-{window:02d}-{case_id}"
+
+
+def suite_greedy_case_id(greedy_id: str, prompt_id: str) -> str:
+    """The deterministic server adapter case id for one greedy prompt."""
+
+    return f"{greedy_id}-{prompt_id}"
+
+
+_DASH_ID_RE = re.compile(DASH_ID_PATTERN)
+
+
+def _valid_adapter_case_id(value: str) -> bool:
+    return _DASH_ID_RE.fullmatch(value) is not None and len(value) <= SUITE_ADAPTER_CASE_ID_MAX
+
+
+def _suite_backend(value: str) -> str:
+    if not 1 <= len(value) <= 128:
+        raise ValueError("backend must be 1 to 128 characters")
+    if any(not 0x20 <= ord(character) <= 0x7E for character in value):
+        raise ValueError("backend must be printable ASCII")
+    return value
+
+
+def _suite_params_regex(value: str) -> str:
+    if not value:
+        raise ValueError("params_regex must be non-empty")
+    if len(value.encode("utf-8")) > 512:
+        raise ValueError("params_regex exceeds 512 UTF-8 bytes")
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        raise ValueError("params_regex must not contain C0 or DEL control characters")
+    return value
+
+
+def _suite_prompt_text(value: str) -> str:
+    size = len(value.encode("utf-8"))
+    if size == 0 or size > SUITE_MAX_PROMPT_BYTES:
+        raise ValueError("prompt text must contain 1 through 16384 UTF-8 bytes")
+    if any((ord(char) < 32 and char not in "\n\t") or ord(char) == 127 for char in value):
+        raise ValueError("prompt text contains a forbidden control character")
+    return value
+
+
+SuiteOperationName = Annotated[StrictStr, StringConstraints(pattern=r"^[A-Z][A-Z0-9_]*$")]
+SuiteBackendSelector = Annotated[StrictStr, AfterValidator(_suite_backend)]
+SuiteParamsRegex = Annotated[StrictStr, AfterValidator(_suite_params_regex)]
+SuitePromptText = Annotated[StrictStr, AfterValidator(_suite_prompt_text)]
+SuiteTokenCount = Annotated[StrictInt, Field(ge=0, le=_SUITE_TOKEN_MAX)]
+SuiteGfxArch = Annotated[StrictStr, StringConstraints(pattern=r"^gfx[0-9a-f]+$")]
+SuiteTimeoutSeconds = Annotated[float, Field(gt=0, le=3600)]
+
+
+class SuiteBuildRequirementV1(ManifestModel):
+    source_id: DashId
+    source_commit: CommitSha
+    toolchain_mode: Literal["host", "rocm"]
+    gfx_target: SuiteGfxArch
+
+
+class SuiteBackendOpsV1(ManifestModel):
+    id: DashId
+    backend: SuiteBackendSelector
+    operations: Annotated[list[SuiteOperationName], Field(min_length=1, max_length=32)]
+    params_regex: SuiteParamsRegex
+
+    @model_validator(mode="after")
+    def _unique_operations(self) -> Self:
+        if len(set(self.operations)) != len(self.operations):
+            raise ValueError("operations must be unique")
+        return self
+
+
+class SuiteGreedyPromptV1(ManifestModel):
+    id: DashId
+    text: SuitePromptText
+
+
+class SuiteGreedyV1(ManifestModel):
+    id: DashId
+    prompt_set_id: DashId
+    prompts: Annotated[
+        list[SuiteGreedyPromptV1],
+        Field(min_length=1, max_length=SUITE_MAX_PROMPTS, json_schema_extra={"uniqueItems": True}),
+    ]
+    seed: Annotated[StrictInt, Field(ge=-(2**31), le=2**31 - 1)]
+    output_tokens: Annotated[StrictInt, Field(ge=1, le=4096)]
+    context_size: Annotated[StrictInt, Field(ge=1, le=1_048_576)]
+    gpu_layers: Annotated[StrictInt, Field(ge=0, le=999)]
+
+    @model_validator(mode="after")
+    def _unique_prompts(self) -> Self:
+        ids = [prompt.id for prompt in self.prompts]
+        if len(set(ids)) != len(ids):
+            raise ValueError("prompt ids must be unique")
+        return self
+
+
+class SuiteCorrectnessV1(ManifestModel):
+    backend_ops: SuiteBackendOpsV1
+    greedy: SuiteGreedyV1
+
+
+class SuitePerformanceCaseV1(ManifestModel):
+    id: DashId
+    prompt_tokens: SuiteTokenCount
+    generated_tokens: SuiteTokenCount
+
+    @model_validator(mode="after")
+    def _one_metric(self) -> Self:
+        if (self.prompt_tokens > 0) == (self.generated_tokens > 0):
+            raise ValueError("exactly one of prompt_tokens/generated_tokens must be nonzero")
+        return self
+
+
+class SuitePerformanceV1(ManifestModel):
+    protocol: Literal["windowed-interleaved-v1"]
+    warmup_runs: Annotated[StrictInt, Field(ge=0, le=16)]
+    measurement_windows: Annotated[StrictInt, Field(ge=1, le=64)]
+    repetitions_per_window: Annotated[StrictInt, Field(ge=1, le=32)]
+    cases: Annotated[
+        list[SuitePerformanceCaseV1],
+        Field(
+            min_length=1,
+            max_length=SUITE_MAX_PERFORMANCE_CASES,
+            json_schema_extra={"uniqueItems": True},
+        ),
+    ]
+
+    @model_validator(mode="after")
+    def _unique_cases(self) -> Self:
+        ids = [case.id for case in self.cases]
+        if len(set(ids)) != len(ids):
+            raise ValueError("performance case ids must be unique")
+        return self
+
+
+class SuiteTimeoutsV1(ManifestModel):
+    capability_seconds: SuiteTimeoutSeconds
+    backend_ops_seconds: SuiteTimeoutSeconds
+    server_readiness_seconds: SuiteTimeoutSeconds
+    server_request_seconds: SuiteTimeoutSeconds
+    server_shutdown_seconds: SuiteTimeoutSeconds
+    benchmark_seconds: SuiteTimeoutSeconds
+
+
+class SuiteManifestV1(ManifestModel):
+    schema_version: Literal[1]
+    id: DashId
+    machine: DashId
+    model: DashId
+    build: SuiteBuildRequirementV1
+    correctness: SuiteCorrectnessV1
+    performance: SuitePerformanceV1
+    timeouts: SuiteTimeoutsV1
+
+    @model_validator(mode="after")
+    def _aggregate_limits(self) -> Self:
+        prompts = self.correctness.greedy.prompts
+        cases = self.performance.cases
+        warmups = self.performance.warmup_runs
+        windows = self.performance.measurement_windows
+        reps = self.performance.repetitions_per_window
+
+        aggregate_bytes = sum(len(prompt.text.encode("utf-8")) for prompt in prompts)
+        if aggregate_bytes > SUITE_MAX_PROMPT_AGGREGATE_BYTES:
+            raise ValueError("aggregate prompt text exceeds 32 KiB")
+
+        invocations = 1 + len(prompts) + len(cases) * (warmups + windows)
+        if invocations > SUITE_MAX_ADAPTER_INVOCATIONS:
+            raise ValueError("suite exceeds the maximum adapter invocation budget")
+        repetitions = len(cases) * (warmups + windows * reps)
+        if repetitions > SUITE_MAX_BENCHMARK_REPETITIONS:
+            raise ValueError("suite exceeds the maximum benchmark repetition budget")
+
+        generated: list[str] = [
+            suite_greedy_case_id(self.correctness.greedy.id, prompt.id) for prompt in prompts
+        ]
+        for case in cases:
+            generated.extend(
+                suite_warmup_case_id(index, case.id) for index in range(1, warmups + 1)
+            )
+            generated.extend(
+                suite_measurement_case_id(window, case.id) for window in range(1, windows + 1)
+            )
+        for case_id in generated:
+            if not _valid_adapter_case_id(case_id):
+                raise ValueError(f"generated adapter case id is invalid: {case_id!r}")
+        if len(set(generated)) != len(generated):
+            raise ValueError("generated adapter case ids collide")
+        return self
+
+
 class UnknownManifestKind(ValueError):
     """Raised when no manifest kind is registered."""
 
@@ -768,6 +983,7 @@ ManifestRegistry.register("source-lock", 1, SourceLockV1)
 ManifestRegistry.register("machine", 1, MachineProfileV1)
 ManifestRegistry.register("build", 1, BuildProfileV1)
 ManifestRegistry.register("model", 1, ModelManifestV1)
+ManifestRegistry.register("suite", 1, SuiteManifestV1)
 
 _RAW_MODELS: dict[str, type[ManifestModel]] = {
     "build": _RawBuildProfileV1,

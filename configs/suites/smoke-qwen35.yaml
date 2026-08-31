@@ -1,0 +1,43 @@
+schema_version: 1
+id: smoke-qwen35
+machine: strix-halo-128g
+model: qwen35-4b-smoke
+build:
+  source_id: strix-llama
+  source_commit: ca94157f70a2776e8da6b6849b50b45a083d0478
+  toolchain_mode: rocm
+  gfx_target: gfx1151
+correctness:
+  backend_ops:
+    id: backend-ops-core
+    backend: ROCm0
+    operations: [MUL_MAT, MUL_MAT_ID, TOP_K, ARGSORT, RMS_NORM]
+    params_regex: ".*"
+  greedy:
+    id: greedy-token-parity
+    prompt_set_id: deterministic-qwen35-v1
+    prompts:
+      - id: short-sequence
+        text: |-
+          Continue this sequence with only the next eight integers separated by spaces:
+          1 1 2 3 5 8 13 21
+    seed: 1234
+    output_tokens: 64
+    context_size: 4096
+    gpu_layers: 999
+performance:
+  protocol: windowed-interleaved-v1
+  warmup_runs: 2
+  measurement_windows: 5
+  repetitions_per_window: 3
+  cases:
+    - {id: pp512, prompt_tokens: 512, generated_tokens: 0}
+    - {id: pp2048, prompt_tokens: 2048, generated_tokens: 0}
+    - {id: tg128, prompt_tokens: 0, generated_tokens: 128}
+timeouts:
+  capability_seconds: 30
+  backend_ops_seconds: 600
+  server_readiness_seconds: 300
+  server_request_seconds: 120
+  server_shutdown_seconds: 30
+  benchmark_seconds: 1800

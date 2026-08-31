@@ -1250,6 +1250,18 @@ class RunSession:
         return text or "run-failed-with-sensitive-error"
 
 
+def list_portable_entries(active: Path) -> tuple[PortableEvidenceV1, ...]:
+    """Load and authenticate one run's committed portable entries (read-only).
+
+    A thin public view over the internal loader so a caller (the suite executor) can
+    authenticate an adapter's portable ``sample.json`` against its content-addressed
+    blob without reaching into run internals. Every returned entry has already been
+    validated against its blob digest and size.
+    """
+
+    return _load_portable_entries(active)
+
+
 def validate_portable_payload(content: bytes, media_type: str) -> None:
     """Enforce the closed portable payload policy (UTF-8, controls, structure).
 

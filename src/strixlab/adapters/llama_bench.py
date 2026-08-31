@@ -34,7 +34,7 @@ from strixlab.manifests import AbsolutePathString, DashId
 from strixlab.models import (
     ModelError,
     ModelLease,
-    ModelReceiptEvidenceV1,
+    ModelReceiptEvidence,
     ModelReceiptV1,
     lease_verified_model,
     require_receipt_inputs_match,
@@ -181,7 +181,7 @@ class LlamaBenchInputsV1(_Model):
     model_sha256: Sha256Hex
     model_digest_status: Literal["verified"] = "verified"
     model_receipt_sha256: Sha256Hex
-    model_receipt_evidence: ModelReceiptEvidenceV1
+    model_receipt_evidence: ModelReceiptEvidence
 
 
 class LlamaBenchRequiredFlagsV1(_Model):

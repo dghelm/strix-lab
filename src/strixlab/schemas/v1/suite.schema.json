@@ -1,0 +1,349 @@
+{
+  "$defs": {
+    "SuiteBackendOpsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "title": "Backend",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Id",
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "pattern": "^[A-Z][A-Z0-9_]*(?![\\s\\S])",
+            "type": "string"
+          },
+          "maxItems": 32,
+          "minItems": 1,
+          "title": "Operations",
+          "type": "array"
+        },
+        "params_regex": {
+          "title": "Params Regex",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "backend",
+        "operations",
+        "params_regex"
+      ],
+      "title": "SuiteBackendOpsV1",
+      "type": "object"
+    },
+    "SuiteBuildRequirementV1": {
+      "additionalProperties": false,
+      "properties": {
+        "gfx_target": {
+          "pattern": "^gfx[0-9a-f]+(?![\\s\\S])",
+          "title": "Gfx Target",
+          "type": "string"
+        },
+        "source_commit": {
+          "pattern": "^[0-9a-f]{40}(?![\\s\\S])",
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "toolchain_mode": {
+          "enum": [
+            "host",
+            "rocm"
+          ],
+          "title": "Toolchain Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_commit",
+        "toolchain_mode",
+        "gfx_target"
+      ],
+      "title": "SuiteBuildRequirementV1",
+      "type": "object"
+    },
+    "SuiteCorrectnessV1": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_ops": {
+          "$ref": "#/$defs/SuiteBackendOpsV1"
+        },
+        "greedy": {
+          "$ref": "#/$defs/SuiteGreedyV1"
+        }
+      },
+      "required": [
+        "backend_ops",
+        "greedy"
+      ],
+      "title": "SuiteCorrectnessV1",
+      "type": "object"
+    },
+    "SuiteGreedyPromptV1": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "title": "SuiteGreedyPromptV1",
+      "type": "object"
+    },
+    "SuiteGreedyV1": {
+      "additionalProperties": false,
+      "properties": {
+        "context_size": {
+          "maximum": 1048576,
+          "minimum": 1,
+          "title": "Context Size",
+          "type": "integer"
+        },
+        "gpu_layers": {
+          "maximum": 999,
+          "minimum": 0,
+          "title": "Gpu Layers",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Id",
+          "type": "string"
+        },
+        "output_tokens": {
+          "maximum": 4096,
+          "minimum": 1,
+          "title": "Output Tokens",
+          "type": "integer"
+        },
+        "prompt_set_id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Prompt Set Id",
+          "type": "string"
+        },
+        "prompts": {
+          "items": {
+            "$ref": "#/$defs/SuiteGreedyPromptV1"
+          },
+          "maxItems": 4,
+          "minItems": 1,
+          "title": "Prompts",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "seed": {
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "title": "Seed",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "prompt_set_id",
+        "prompts",
+        "seed",
+        "output_tokens",
+        "context_size",
+        "gpu_layers"
+      ],
+      "title": "SuiteGreedyV1",
+      "type": "object"
+    },
+    "SuitePerformanceCaseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "generated_tokens": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "title": "Generated Tokens",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Id",
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "maximum": 1048576,
+          "minimum": 0,
+          "title": "Prompt Tokens",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "prompt_tokens",
+        "generated_tokens"
+      ],
+      "title": "SuitePerformanceCaseV1",
+      "type": "object"
+    },
+    "SuitePerformanceV1": {
+      "additionalProperties": false,
+      "properties": {
+        "cases": {
+          "items": {
+            "$ref": "#/$defs/SuitePerformanceCaseV1"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "title": "Cases",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "measurement_windows": {
+          "maximum": 64,
+          "minimum": 1,
+          "title": "Measurement Windows",
+          "type": "integer"
+        },
+        "protocol": {
+          "const": "windowed-interleaved-v1",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "repetitions_per_window": {
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Repetitions Per Window",
+          "type": "integer"
+        },
+        "warmup_runs": {
+          "maximum": 16,
+          "minimum": 0,
+          "title": "Warmup Runs",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "protocol",
+        "warmup_runs",
+        "measurement_windows",
+        "repetitions_per_window",
+        "cases"
+      ],
+      "title": "SuitePerformanceV1",
+      "type": "object"
+    },
+    "SuiteTimeoutsV1": {
+      "additionalProperties": false,
+      "properties": {
+        "backend_ops_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Backend Ops Seconds",
+          "type": "number"
+        },
+        "benchmark_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Benchmark Seconds",
+          "type": "number"
+        },
+        "capability_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Capability Seconds",
+          "type": "number"
+        },
+        "server_readiness_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Server Readiness Seconds",
+          "type": "number"
+        },
+        "server_request_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Server Request Seconds",
+          "type": "number"
+        },
+        "server_shutdown_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Server Shutdown Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "capability_seconds",
+        "backend_ops_seconds",
+        "server_readiness_seconds",
+        "server_request_seconds",
+        "server_shutdown_seconds",
+        "benchmark_seconds"
+      ],
+      "title": "SuiteTimeoutsV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:strixlab:schema:suite:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "build": {
+      "$ref": "#/$defs/SuiteBuildRequirementV1"
+    },
+    "correctness": {
+      "$ref": "#/$defs/SuiteCorrectnessV1"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "machine": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Machine",
+      "type": "string"
+    },
+    "model": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Model",
+      "type": "string"
+    },
+    "performance": {
+      "$ref": "#/$defs/SuitePerformanceV1"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "timeouts": {
+      "$ref": "#/$defs/SuiteTimeoutsV1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "machine",
+    "model",
+    "build",
+    "correctness",
+    "performance",
+    "timeouts"
+  ],
+  "title": "SuiteManifestV1",
+  "type": "object"
+}

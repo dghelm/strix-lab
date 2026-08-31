@@ -29,12 +29,14 @@ from strixlab.doctor import (
     SensitiveInterpolationError,
     run_doctor,
 )
-from strixlab.evidence import RunError, inspect_run
+from strixlab.evidence import RunError, RunOutcome, inspect_run
 from strixlab.git_boundary import SshTrust
 from strixlab.manifests import (
     BuildProfileV1,
+    MachineProfileV1,
     ManifestRegistry,
     SourceLockV1,
+    SuiteManifestV1,
     resolve_and_validate_manifest,
     validate_manifest,
 )
@@ -45,6 +47,11 @@ from strixlab.secret_policy import RedactionContext
 from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
+from strixlab.suites import (
+    SuiteError,
+    SuiteExecutionError,
+    run_suite,
+)
 
 _BUILD_DOMAIN_ERRORS = (
     OSError,
@@ -490,6 +497,100 @@ def run_inspect(
         "state": str(inspection.state),
     }
     _evidence_echo(canonical_json_bytes(payload).decode(), context, nl=False)
+
+
+@run_app.command("suite")
+def run_suite_command(
+    suite: Annotated[
+        Path,
+        typer.Argument(
+            help="Versioned suite manifest YAML path.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    machine: Annotated[
+        Path,
+        typer.Option(
+            "--machine",
+            help="Resolved machine-profile YAML path.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ],
+    build: Annotated[str, typer.Option("--build", help="Machine-local build ID.")],
+    model_receipt: Annotated[
+        str,
+        typer.Option("--model-receipt", help="Local model receipt SHA-256."),
+    ],
+    server_port: Annotated[
+        int,
+        typer.Option("--server-port", help="Loopback server port for the greedy case."),
+    ] = 18080,
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Run one deterministic smoke suite and finalize an immutable run."""
+
+    environ, context = _evidence_terminal_context()
+    try:
+        raw_suite = read_manifest(suite)
+        manifest = validate_manifest("suite", raw_suite)
+        if not isinstance(manifest, SuiteManifestV1):
+            raise TypeError("suite registry returned the wrong model")
+        raw_machine = read_manifest(machine)
+        machine_profile = resolve_and_validate_manifest("machine", raw_machine, environ)
+        if not isinstance(machine_profile, MachineProfileV1):
+            raise TypeError("machine registry returned the wrong model")
+    except ValidationError as exc:
+        _evidence_echo("invalid suite invocation:", context, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _evidence_echo(f"  {location}: {error['msg']}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        _evidence_echo(f"suite run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        outcome = run_suite(
+            manifest,
+            suite.read_bytes(),
+            machine_profile=machine_profile,
+            build_id=build,
+            local_receipt_sha256=model_receipt,
+            home=resolve_home(home),
+            server_port=server_port,
+            environ=environ,
+        )
+    except SuiteExecutionError as exc:
+        # A run was created but no structured result could be published; report it.
+        _evidence_echo(f"run: {exc.run_id}", context, err=True)
+        if exc.record is not None:
+            _evidence_echo(f"record: {exc.record}", context, err=True)
+        _evidence_echo(f"suite run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except SuiteError as exc:
+        # A pre-run failure: no run was created, so print no fabricated run id.
+        _evidence_echo(f"suite run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"suite run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    failed = outcome.outcome is not RunOutcome.SUCCESS
+    stream_err = failed
+    _evidence_echo(f"run: {outcome.run_id}", context, err=stream_err)
+    _evidence_echo(f"record: {outcome.inspection.record}", context, err=stream_err)
+    _evidence_echo(
+        f"suite: {outcome.result.status} ({outcome.result.reason})", context, err=stream_err
+    )
+    if failed:
+        raise typer.Exit(code=1)
 
 
 @bundle_app.command("export")

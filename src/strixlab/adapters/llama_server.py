@@ -34,7 +34,7 @@ from strixlab.manifests import AbsolutePathString, DashId
 from strixlab.models import (
     ModelError,
     ModelLease,
-    ModelReceiptEvidenceV1,
+    ModelReceiptEvidence,
     ModelReceiptV1,
     lease_verified_model,
     require_receipt_inputs_match,
@@ -171,7 +171,7 @@ class LlamaServerInputsV1(_Model):
     model_sha256: Sha256Hex
     model_digest_status: Literal["verified"] = "verified"
     model_receipt_sha256: Sha256Hex
-    model_receipt_evidence: ModelReceiptEvidenceV1
+    model_receipt_evidence: ModelReceiptEvidence
 
 
 class LlamaServerCapabilitiesV1(_Model):
@@ -782,7 +782,14 @@ def _finalize(
     # raises the integrity error (via the runner's outer boundary) before ``sample.json``
     # exists.
     lease.verify()
-    evidence.json("sample.json", sample.model_dump(mode="json"))
+    # Publish the terminal sample.json twice with identical canonical bytes: once as local
+    # evidence (so it sits beside the binary response siblings and is covered by the run
+    # checksums) and once as a portable entry at the same logical path (so a consumer can
+    # authenticate it against a content-addressed blob without reading the local tree).
+    payload = canonical_json_bytes(sample.model_dump(mode="json"))
+    sample_path = f"{evidence.base}/sample.json"
+    evidence.run.write_evidence(sample_path, payload)
+    evidence.run.write_portable(sample_path, payload, media_type="application/json", role="samples")
     return sample
 
 

@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from _build_fixtures import publish_present_build, stub_cache_verification
 
 import strixlab.build_cache as cache_module
 import strixlab.secure_fs as secure_fs
@@ -39,29 +40,10 @@ _HEX = "cd" * 32
 def _stub_artifact_verification(monkeypatch: pytest.MonkeyPatch) -> None:
     # These tests exercise the journal/record/recovery state machine, not the
     # artifact-hash comparison or producer provenance (both covered end-to-end in
-    # test_cmake_build with real build attempts).
-    monkeypatch.setattr(cache_module, "verify_artifact_capture", lambda *a, **k: None)
-    # Stub the record-verification and attestor authentication entry points; these
-    # tests never publish real attempt records, so the producer record and the
-    # attestor result/digest bindings are covered end-to-end in test_cmake_build.
-    # _load_attestation stays real so the dangling/missing-attestation paths remain
-    # exercised; _make_present writes a schema-valid attestation for a normal build.
-    monkeypatch.setattr(cache_module, "_verify_canonical_producer", lambda *a, **k: None)
-    monkeypatch.setattr(cache_module, "_authenticate_attestor", lambda *a, **k: None)
-
-
-def _write_attestation(home: Path, digest: str) -> None:
-    layout = cache_module._layout(home, create=False)
-    attestation = cache_module.BuildAttestationV1(
-        build_id=_BUILD,
-        canonical_record_sha256=digest,
-        attestor_attempt_id=_ATTEMPT_A,
-        execution_class="built",
-        artifact_set_id=_artifacts().artifact_set_id,
-        producer_record_sha256="record-sha256:" + "11" * 32,
-        attestor_record_sha256="record-sha256:" + "11" * 32,
-    )
-    cache_module._publish_attestation(layout, attestation)
+    # test_cmake_build with real build attempts). _load_attestation stays real so the
+    # dangling/missing-attestation paths remain exercised; _make_present writes a
+    # schema-valid attestation for a normal build.
+    stub_cache_verification(monkeypatch)
 
 
 def _artifacts() -> BuildArtifactsV1:
@@ -138,18 +120,10 @@ def _record(
     )
 
 
-def _make_present(home: Path, *, attempt: str = _ATTEMPT_A, rehydrate: bool = False) -> str:
-    with build_cache_session(_BUILD, attempt, home=home) as session:
-        session.begin_materialization(rehydrate=rehydrate)
-        root = session.root
-        root.mkdir(parents=True, exist_ok=True)
-        owner = write_build_root_owner(root, attempt, _BUILD)
-        session.bind_root(owner)
-        digest = session.publish(_record(producer=attempt), rehydrate=rehydrate)
-    layout = cache_module._layout(home, create=False)
-    if not os.path.lexists(cache_module._attestation_path(layout, _BUILD)):
-        _write_attestation(home, digest)  # a normal present build is attested
-    return digest
+def _make_present(home: Path, *, attempt: str = _ATTEMPT_A) -> str:
+    return publish_present_build(
+        home, build_id=_BUILD, attempt=attempt, record=_record(producer=attempt)
+    )
 
 
 def test_miss_then_present_then_hit(tmp_path: Path) -> None:
@@ -1792,13 +1766,8 @@ def _artifacts_with_inspection(ldd_sha256: str) -> BuildArtifactsV1:
 
 
 def _publish_present(home: Path, artifacts: BuildArtifactsV1, *, attempt: str = _ATTEMPT_A) -> None:
-    with build_cache_session(_BUILD, attempt, home=home) as session:
-        session.begin_materialization(rehydrate=False)
-        root = session.root
-        root.mkdir(parents=True, exist_ok=True)
-        session.bind_root(write_build_root_owner(root, attempt, _BUILD))
-        digest = session.publish(_record(producer=attempt, artifacts=artifacts), rehydrate=False)
-    _write_attestation(home, digest)  # a normal present build is attested
+    record = _record(producer=attempt, artifacts=artifacts)
+    publish_present_build(home, build_id=_BUILD, attempt=attempt, record=record)
 
 
 def test_rehydrate_accepts_divergent_non_identity_observations(tmp_path: Path) -> None:

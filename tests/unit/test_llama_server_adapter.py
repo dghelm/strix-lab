@@ -44,11 +44,18 @@ CASE = LlamaServerCaseV1(
 class _FakeRun:
     def __init__(self) -> None:
         self.files: dict[str, bytes] = {}
+        self.portable: dict[str, bytes] = {}
 
     def write_evidence(self, relative: str, content: bytes) -> Path:
         assert relative not in self.files
         self.files[relative] = content
         return Path("/fake") / relative
+
+    def write_portable(
+        self, logical_path: str, content: bytes, *, media_type: str, role: str
+    ) -> None:
+        assert logical_path not in self.portable
+        self.portable[logical_path] = content
 
 
 class _FailingRun(_FakeRun):
@@ -354,7 +361,11 @@ def test_managed_server_lifecycle(tmp_path: Path, mode: str, expected: str) -> N
     assert sample.status == expected
     assert sample.lifecycle is not None
     assert sample.lifecycle.returncode is not None
-    assert f"adapters/llama-server/{CASE.id}/sample.json" in run.files
+    sample_path = f"adapters/llama-server/{CASE.id}/sample.json"
+    assert sample_path in run.files
+    # The terminal sample.json is also published as a portable entry with identical bytes,
+    # so a consumer can authenticate it against a content-addressed blob.
+    assert run.portable.get(sample_path) == run.files[sample_path]
     if mode == "success":
         assert sample.readiness is not None and sample.readiness.attempts >= 2
         assert len(sample.requests) == 2

@@ -18,7 +18,12 @@ from pydantic import ValidationError
 import strixlab.adapters.llama_bench as lb
 import strixlab.evidence as ev
 from strixlab.bundles import export_bundle, verify_bundle
-from strixlab.models import ModelReceiptEvidenceV1, ModelReceiptV1, receipt_evidence_digest
+from strixlab.models import (
+    ModelExecutionProjectionV1,
+    ModelReceiptEvidenceV2,
+    ModelReceiptV1,
+    receipt_evidence_digest,
+)
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
 from strixlab.serialization import canonical_json_bytes
 
@@ -929,9 +934,12 @@ def _projection(**overrides: object) -> lb.ProcessProjectionV1:
 _CAPS = lb.LlamaBenchCapabilitiesV1(
     binary_sha256="c" * 64, advertised_output_modes=lb.EXPECTED_OUTPUT_MODES
 )
-_EVIDENCE = ModelReceiptEvidenceV1(
+_EVIDENCE = ModelReceiptEvidenceV2(
     manifest_id="qwen35-4b-smoke",
     manifest_sha256="d" * 64,
+    execution=ModelExecutionProjectionV1(
+        verification_status="unverified", required_sources=(), required_features=()
+    ),
     primary_local_path="/models/x.gguf",
     primary_sha256="b" * 64,
     primary_size_bytes=16,

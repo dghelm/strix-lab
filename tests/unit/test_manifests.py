@@ -50,7 +50,7 @@ def test_all_v1_manifests_validate(
 
 
 def test_registry_is_extensible_and_sorted() -> None:
-    assert ManifestRegistry.kinds() == ("build", "machine", "model", "source-lock")
+    assert ManifestRegistry.kinds() == ("build", "machine", "model", "source-lock", "suite")
 
 
 def test_registered_model_resolves_and_keeps_raw_template(model_value: dict[str, Any]) -> None:

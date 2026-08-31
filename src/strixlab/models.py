@@ -29,9 +29,9 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from strixlab.build_paths import is_unsafe_directory, prepare_directory_tree
 from strixlab.executable_identity import hash_executable
@@ -63,13 +63,16 @@ __all__ = [
     "ModelCacheError",
     "ModelCompatibilityError",
     "ModelError",
+    "ModelExecutionProjectionV1",
     "ModelFileReceiptV1",
     "ModelInspectorError",
     "ModelLease",
     "ModelManifestError",
     "ModelMetadataError",
     "ModelObservationV1",
+    "ModelReceiptEvidence",
     "ModelReceiptEvidenceV1",
+    "ModelReceiptEvidenceV2",
     "ModelReceiptV1",
     "ModelSidecarError",
     "SidecarReceiptV1",
@@ -277,15 +280,39 @@ class _SidecarEvidenceV1(_Model):
     tensor_count: Annotated[int, Field(ge=0)] | None
 
 
-class ModelReceiptEvidenceV1(_Model):
-    """The compact, portable receipt projection adapters embed in their samples.
+class ModelExecutionProjectionV1(_Model):
+    """Authenticated projection of the manifest's execution requirements.
+
+    Intentional pre-release receipt-v1 addition: because this projection is bound by the
+    receipt/evidence digests, a consumer (SUITE-001) can fail closed on a non-empty
+    required-sources/features set without re-reading the model manifest, rather than
+    inferring emptiness. In this smoke v1 the checked-in manifests declare no
+    requirements; a future milestone that supports them extends this projection.
+    """
+
+    verification_status: Literal["unverified"]
+    required_sources: tuple[_BoundedText, ...]
+    required_features: tuple[_BoundedText, ...]
+
+    @model_validator(mode="after")
+    def _unique(self) -> Self:
+        for name, values in (
+            ("required_sources", self.required_sources),
+            ("required_features", self.required_features),
+        ):
+            if len(set(values)) != len(values):
+                raise ValueError(f"{name} entries must be unique")
+        return self
+
+
+class _ModelReceiptEvidenceBase(_Model):
+    """The shared, portable receipt projection adapters embed in their samples.
 
     Its canonical digest equals ``model_receipt_sha256``, so exported sample evidence
     independently substantiates what ``verified`` means after the local registry (its
     metadata/receipt files) disappears. It contains no local registry paths.
     """
 
-    schema_version: Literal[1] = 1
     manifest_id: str
     manifest_sha256: Sha256Hex
     primary_local_path: AbsolutePathString
@@ -306,6 +333,30 @@ class ModelReceiptEvidenceV1(_Model):
     source_candidate_id: str
     source_content_tree_id: str
     source_base_commit: str
+
+
+class ModelReceiptEvidenceV1(_ModelReceiptEvidenceBase):
+    """Legacy v1 evidence: the shared projection with no execution requirements.
+
+    Retained as a reader so receipts published before the execution projection remain
+    readable and authentic; new verification issues :class:`ModelReceiptEvidenceV2`.
+    """
+
+    schema_version: Literal[1] = 1
+
+
+class ModelReceiptEvidenceV2(_ModelReceiptEvidenceBase):
+    """v2 evidence: the shared projection plus an authenticated execution projection."""
+
+    schema_version: Literal[2] = 2
+    execution: ModelExecutionProjectionV1
+
+
+# Discriminated on ``schema_version`` so a stored receipt loads its exact evidence shape;
+# legacy v1 receipts stay readable while new receipts carry the execution projection.
+ModelReceiptEvidence = Annotated[
+    ModelReceiptEvidenceV1 | ModelReceiptEvidenceV2, Field(discriminator="schema_version")
+]
 
 
 class ModelObservationV1(_Model):
@@ -331,7 +382,7 @@ class ModelReceiptV1(_Model):
     inspector: GgufInspectorBindingV1
     compatibility: Literal["verified", "asserted"]
     publishable: bool
-    evidence: ModelReceiptEvidenceV1
+    evidence: ModelReceiptEvidence
 
 
 # --- Digests ------------------------------------------------------------------
@@ -355,7 +406,7 @@ def manifest_digest(manifest: ModelManifestV1) -> str:
     return digest
 
 
-def receipt_evidence_digest(evidence: ModelReceiptEvidenceV1) -> str:
+def receipt_evidence_digest(evidence: ModelReceiptEvidence) -> str:
     """SHA-256 of the exact canonical portable evidence projection."""
 
     _, digest = _domain_digest(_EVIDENCE_DOMAIN, evidence.model_dump(mode="json"))
@@ -369,7 +420,7 @@ def require_receipt_inputs_match(
     model_path: str,
     model_sha256: str,
     model_receipt_sha256: str,
-    model_receipt_evidence: ModelReceiptEvidenceV1,
+    model_receipt_evidence: ModelReceiptEvidence,
 ) -> None:
     """Bind an adapter's verified-receipt inputs to a live :class:`ModelReceiptV1`.
 
@@ -1269,7 +1320,7 @@ def _build_evidence(
     *,
     compatibility: Literal["verified", "asserted"],
     publishable: bool,
-) -> ModelReceiptEvidenceV1:
+) -> ModelReceiptEvidenceV2:
     sidecar_evidence = tuple(
         _SidecarEvidenceV1(
             id=sidecar.id,
@@ -1284,9 +1335,14 @@ def _build_evidence(
         )
         for sidecar in sidecars
     )
-    return ModelReceiptEvidenceV1(
+    return ModelReceiptEvidenceV2(
         manifest_id=manifest.id,
         manifest_sha256=digest,
+        execution=ModelExecutionProjectionV1(
+            verification_status=manifest.execution.verification_status,
+            required_sources=tuple(manifest.execution.required_sources),
+            required_features=tuple(manifest.execution.required_features),
+        ),
         primary_local_path=primary.receipt.local_path,
         primary_sha256=primary.receipt.sha256,
         primary_size_bytes=primary.receipt.identity.size_bytes,

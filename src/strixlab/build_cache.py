@@ -10,7 +10,7 @@ import re
 import secrets
 import shutil
 import stat
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -291,6 +291,31 @@ class BuildCleanupResult:
     build_id: str
     state: MaterializationState
     record: Path
+
+
+@dataclass(frozen=True, slots=True)
+class BuildLease:
+    """A read-only, lock-holding handle to one PRESENT, attested canonical build.
+
+    Analogous in shape to :class:`~strixlab.sources.SourceLease`: the exact existing
+    per-build-ID lock is held for the whole lease context, so ``cleanup_build`` and
+    any materialization transition cannot race a run that leased the build. The fields
+    mirror the canonical build authenticated at acquisition, and :meth:`verify`
+    re-authenticates it under the still-held lock via the locked inspection primitive,
+    additionally binding the leased root's no-follow device+inode captured at
+    acquisition so a symlink or directory replacement fails closed.
+    """
+
+    build_id: str
+    root: Path
+    canonical: CanonicalBuildRecordV1
+    canonical_record_sha256: str
+    verify_callback: Callable[[], None]
+
+    def verify(self) -> None:
+        """Re-authenticate the leased build under the held lock; fail closed on drift."""
+
+        self.verify_callback()
 
 
 @dataclass(frozen=True, slots=True)
@@ -795,6 +820,76 @@ def inspect_build(build_id: str, *, home: Path) -> BuildInspection:
             inspected.canonical,
             inspected.digest,
             inspected.attested,
+        )
+
+
+def _leased_root_identity(root: Path) -> tuple[int, int]:
+    """Capture one leased PRESENT root's no-follow device+inode, failing closed.
+
+    Opens the root ``O_DIRECTORY | O_NOFOLLOW`` so a symlink or non-directory cannot
+    be followed, then rejects any foreign-owned or non-directory entry.
+    """
+
+    try:
+        descriptor = os.open(root, _DIR_OPEN_FLAGS)
+    except OSError as exc:
+        raise BuildCacheError("leased build root is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if is_unsafe_directory(metadata):
+        raise BuildCacheError("leased build root is unsafe")
+    return metadata.st_dev, metadata.st_ino
+
+
+def _require_present_attested(inspected: _InspectedBuild) -> None:
+    if inspected.registry.state is not MaterializationState.PRESENT:
+        raise BuildCacheError("leased build is not present")
+    if not inspected.attested:
+        raise BuildCacheError("leased build is recovery-pending and not attested")
+
+
+@contextlib.contextmanager
+def lease_build(build_id: str, *, home: Path) -> Iterator[BuildLease]:
+    """Hold the build-ID lock while yielding one PRESENT, attested canonical build.
+
+    Acquires the exact existing per-build lock, verifies the build through the locked
+    inspection primitive (never public :func:`inspect_build`, which would try to
+    reacquire the held lock), and yields only a fully verified, attested PRESENT build.
+    The lock is held for the whole context, so ``cleanup_build`` and any
+    materialization transition cannot race a run that holds the lease.
+    """
+
+    _validate_build_id(build_id)
+    layout = _layout(home, create=False)
+    lock = layout.locks / f"build-id-{build_id.removeprefix('build-sha256:')}.lock"
+    with exclusive_lock(lock) as held:
+        if not held.acquired:
+            raise BuildCacheError(held.reason or "build cache lock is unavailable")
+        inspected = _inspect_build_locked(layout, build_id)
+        _require_present_attested(inspected)
+        root = layout.materialized / build_id
+        acquired_device, acquired_inode = _leased_root_identity(root)
+
+        def verify() -> None:
+            reinspected = _inspect_build_locked(layout, build_id)
+            _require_present_attested(reinspected)
+            if (
+                reinspected.digest != inspected.digest
+                or reinspected.canonical != inspected.canonical
+            ):
+                raise BuildCacheError("leased build canonical record changed")
+            current_device, current_inode = _leased_root_identity(root)
+            if current_device != acquired_device or current_inode != acquired_inode:
+                raise BuildCacheError("leased build root identity changed")
+
+        yield BuildLease(
+            build_id=build_id,
+            root=root,
+            canonical=inspected.canonical,
+            canonical_record_sha256=inspected.digest,
+            verify_callback=verify,
         )
 
 

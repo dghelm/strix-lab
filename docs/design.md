@@ -769,9 +769,17 @@ Three decision models ship as explicit drafts with no fabricated local identity.
 
 `LlamaBenchInputsV1` and `LlamaServerInputsV1` retain `model_id`, `model_path`, and
 `model_sha256`, change `model_digest_status` from `asserted` to `verified`, and add
-`model_receipt_sha256` plus an embedded compact `ModelReceiptEvidenceV1` projection whose
-canonical digest equals `model_receipt_sha256`, so exported sample evidence independently
-substantiates what `verified` means after the local registry disappears. Each runner
+`model_receipt_sha256` plus an embedded compact receipt-evidence projection (a
+`schema_version`-discriminated union) whose canonical digest equals `model_receipt_sha256`,
+so exported sample evidence independently substantiates what `verified` means after the
+local registry disappears. New verification issues `ModelReceiptEvidenceV2`, which adds an
+authenticated `ModelExecutionProjectionV1` of the manifest's execution requirements
+(`verification_status` and the bounded, unique `required_sources`/`required_features`
+tuples) so a downstream consumer can fail closed on a non-empty requirement set without
+re-reading the model manifest. The legacy `ModelReceiptEvidenceV1` shape (no execution
+projection) is retained as a reader, so receipts published before this pre-release change
+remain readable and authentic; adapters and `require_receipt_inputs_match` accept either
+version. Each runner
 receives the corresponding `ModelReceiptV1`, binds it to the inputs, and holds
 `lease_verified_model` across the complete child lifetime, passing the lease's
 `/proc/self/fd/<fd>` operand and inherited descriptor to every child so each opens the
@@ -782,6 +790,155 @@ filename against the effective descriptor operand. `ModelLease.verify()` gates e
 terminal `sample.json`; context-manager exit repeats it defensively. Adapters never rehash
 multi-gigabyte model bytes per sample. This is an intentional in-place V1 migration: the
 repository is pre-release and has no supported persisted adapter samples.
+
+## Deterministic smoke suite v1
+
+The smoke suite is the first user-facing boundary that composes the three ca94157
+adapters into one immutable run. It is a thin orchestration milestone: the adapters keep
+owning every child process, capability probe, parser, raw stream, stable-executable
+check, model lease, and per-case `sample.json`; the suite adds no comparison statistics,
+ranking, candidate pairing, profiler integration, generic workflow engine, adapter
+plugin registry, downloader, build creation, or model verification. A later CLI polish
+milestone may add name resolution without changing the suite library.
+
+A strict `suite` manifest v1 is registered in the manifest registry and checked in as
+`configs/suites/smoke-qwen35.yaml` with a generated `suite.schema.json`. It prefers
+typed sections (`build`, `correctness.backend_ops`, `correctness.greedy`, `performance`,
+`timeouts`) over a generic step list, so the exact deterministic prompt corpus is
+manifest data captured verbatim in `manifest.input.yaml`/`manifest.resolved.yaml` with no
+second prompt registry. Field validation bounds prompt count/text, operation count, case
+count, repetition/window counts, and timeouts, and requires ordered unique prompt and
+case ids. After field validation, aggregate limits reject a run before allocation: at
+most 4 prompts and 8 performance cases; at most 128 total adapter invocations across
+correctness, warmups, and measurements; at most 512 total benchmark repetitions under
+`cases * (warmup_runs + measurement_windows * repetitions_per_window)`; and at most 32
+KiB of aggregate prompt text with each prompt also within the server adapter's 16 KiB
+UTF-8 limit. The deterministically generated adapter case ids are cross-validated against
+the adapters' dash-id and 64-byte length contracts and must be collision-free. The
+checked-in manifest is a policy template, not proof that `ROCm0` exists on any machine;
+the backend adapter's runtime capability and hard-gate evidence decides that.
+
+The CLI takes explicit paths and addresses — `strixlab run suite <suite.yaml> --machine
+<machine.yaml> --build <BUILD_ID> --model-receipt <LOCAL_RECEIPT_SHA256> [--server-port]
+[--home]` — never an ambiguous "latest" object, and performs no implicit config-name
+search. The supplied machine profile must have the manifest's machine id, and
+`load_model_receipt(manifest.model, local_receipt_sha256, home=...)` re-authenticates the
+explicit local receipt and binds its exact model id. The adapter-facing portable receipt
+digest is `receipt_evidence_digest(receipt.evidence)`, distinct from the local
+receipt-envelope address used by `load_model_receipt`. As an intentional pre-release
+change, new verification issues `ModelReceiptEvidenceV2`, which carries an authenticated
+`ModelExecutionProjectionV1` (the manifest's `verification_status` plus its bounded, unique
+`required_sources`/`required_features` tuples), populated in `_build_evidence` so the
+receipt/evidence digests bind it; the legacy v1 evidence shape is retained as a reader.
+SUITE-001 fails closed before `begin_run` on a legacy v1 receipt (it cannot prove
+requirements) and on any v2 receipt whose requirement tuples are non-empty — emptiness is
+authenticated, never inferred. The checked-in smoke manifests declare no requirements;
+supporting a non-empty set is a future milestone. The suite still binds the exact
+receipt/model id and enforces the manifest's explicit source, toolchain, and gfx
+requirements.
+
+`build_cache.py` gains a small read-only `BuildLease`/`lease_build`, analogous in shape to
+the source lease but keyed on the existing build-ID lock. It acquires that exact lock,
+calls the existing locked inspection primitive directly (never public `inspect_build`,
+which would try to reacquire the held lock), and yields only when the build is `PRESENT`,
+attested, and fully verified; the lock is held for the context lifetime so `cleanup_build`
+and materialization cannot race the run. At acquisition it captures the strict resolved
+root path and its no-follow directory device/inode; `verify()` reruns the locked
+inspection (re-verifying the canonical record, digest, and root artifacts) and additionally
+rejects a symlink or directory replacement by requiring the same root device/inode. From
+the leased canonical artifact inventory the suite resolves exactly one regular ELF
+executable for each of `test-backend-ops`, `llama-server`, and `llama-bench`, beneath the
+leased root, using the recorded artifact SHA-256; the adapters still re-hash each binary.
+Before allocating a run it requires the source evidence to name the manifest's source id
+and exact ca94157 commit, the toolchain mode and gfx-target selection to match, and all
+three targets to be present.
+
+Child environments are reconstructed from the leased canonical build environment tuple,
+never from ambient `os.environ`. Names must be unique and match the environment-name
+grammar; every value is split and rejoined at `os.pathsep` boundaries, an exact
+`{BUILD_ROOT}` component (or one beginning `{BUILD_ROOT}` + `os.sep`) is rehydrated with
+the leased root, and canonical `HOME`/`TMPDIR` are replaced with separate directories
+beneath one fresh mode-0700 temporary root. A missing `HOME`/`TMPDIR`, a residual
+`{SOURCE_ROOT}`/`{BUILD_HOME}`/`{BUILD_TMP}` or any other placeholder-shaped component, a
+NUL, a duplicate name, or a wrong `LANG`/`LC_ALL`/`TZ` value fails closed; all other
+authenticated entries (including `PATH`, ROCm path lists, and `SOURCE_DATE_EPOCH`) are
+retained byte-for-byte. The temporary root is scratch, not evidence, and is removed after
+the adapters stop, including on failure.
+
+The high-level executor owns `begin_run`, the machine-profile exclusive lock, the build
+lease, the protocol, `suite/result.json`, and finalization; the adapters keep their
+caller-owned `RunSession` contract and never finalize. The global acquisition order is
+build lease, then run session, then machine lock; release is machine lock, run
+finalization, then build lease. Manifests are validated and the receipt authenticated
+before the build lease; the build is bound under the held lease before a run is allocated.
+Immediately after `begin_run`, before the machine lock, the executor writes canonical
+portable snapshots `suite/build.json` (role `build`), `suite/model.json` (role
+`environment`), and `suite/machine.json` (role `environment`, the validated profile and
+its canonical digest, not live telemetry); `environment` is the normative v1 role for an
+authenticated runtime input. A lock refusal becomes a structured failed result and a
+finalized failure run. `BuildLease.verify()` is called before leaving every structured
+path after acquisition, including machine-lock refusal and, on adapter paths, before
+releasing the machine lock.
+
+The correctness-first protocol runs one `BackendOpsCaseV1` (passing only when the sample
+status is `passed` with a present, passing gate), then one `LlamaServerCaseV1` per ordered
+greedy prompt (passing only when the adapter status is `success`, both nonce-isolated
+temperature-zero responses exist, each has at least one token, and their exact token-ID
+tuples are equal). It stops before performance on the first correctness failure; this is a
+hard gate, not a score, and never compares against another build/model arm. A pure planner
+then expands the single-arm `windowed-interleaved-v1` schedule — warmup round 1 across all
+cases in order, warmup round 2, then measurement windows 1..N across all cases — with
+`repetitions=1` per warmup and `repetitions_per_window` per measurement, and a distinct
+evidence namespace per case so JUDGE-001 can pair case/window coordinates later without
+statistics. It stops on the first warmup or measurement failure; warmup samples are raw
+evidence excluded from the measurement projection, and each successful measurement
+window/case contributes the adapter's normalized `samples_ts`, average, and standard
+deviation plus a compact sample reference, with no pooling, intervals, outlier removal,
+ranking, or regression labels.
+
+Compact strict/frozen/finite v1 runtime models live in `suites.py`, including an
+authenticated input reference for build/model/machine, a compact adapter sample reference
+(adapter, phase, case id, logical path, canonical sample SHA-256, persistence, adapter
+status, and category), backend-op and greedy-parity verdicts, planned/completed warmup and
+measurement counts, one measurement projection per successful window/case, and a terminal
+`passed`/`failed` status with a closed reason (`passed`, `lock-unavailable`,
+`backend-ops-failed`, `greedy-parity-failed`, `warmup-failed`, `measurement-failed`, or
+`integrity-failed`). A closed mapping folds every declared backend/server/bench status
+(and the bench closed `reason`) into a fixed set of suite categories, never copying
+free-form adapter reason text; any future unmapped status is `adapter-failed` and fails
+closed, so a new adapter status cannot silently pass. The sample-reference digest is the
+shared portable blob SHA-256 —
+`SHA-256(canonical_json_bytes(sample.model_dump(mode="json")))`. Every adapter publishes
+its terminal `sample.json` as a portable entry at the predictable logical path
+(`adapter/backend-ops/<case>/sample.json`, `adapters/llama-server/<case>/sample.json`,
+`adapters/llama-bench/<case>/sample.json`), and the suite authenticates each sample only
+against its content-addressed portable blob — a local-only write fails closed. Because the
+`llama-server` tree also carries binary response bytes, that adapter additionally keeps a
+byte-identical local copy of `sample.json` beside those siblings (so the run checksums
+cover it), publishing the same canonical bytes both ways after its `lease.verify()`. A
+returned failure sample counts as completed once its portable blob authenticates; a thrown
+adapter integrity exception or a failed authentication does not, and yields
+`integrity-failed`. Planned counts always describe the full deterministic schedule;
+completed counts describe only returned/authenticated samples.
+
+`suite/result.json` (role `summary`) is written exactly once at the end of every
+structured adapter/verdict path, while the machine lock is still held. Ordinary adapter
+failure samples, token-parity failures, and authenticated sample-digest failures lead to a
+complete result and `RunOutcome.FAILURE`; a fully clean protocol leads to
+`RunOutcome.SUCCESS`. A backend case passes only when the adapter status maps to success
+and its gate is present and passed, so a tampered success-status sample with a failed gate
+is rejected. The single mode-0700 scratch root is removed on every exit including adapter
+failure; a deletion failure is not swallowed but escapes so the run finalizes failure
+without a successful `suite/result.json`. Failure to publish an input snapshot or the
+result itself is an evidence-store integrity exception, as is any unexpected exception: it
+is never concealed and never claims a structured result, and `RunSession.__exit__`
+performs its fail-safe finalization without a `suite/result.json`. The suite executor
+takes narrow,
+explicit test seams — the `begin_run` clock/token factories plus a temporary-directory
+factory, a machine-lock factory, and the three adapter callables, all defaulting to
+production implementations — making lock refusal, filesystem identity changes, cleanup,
+and exact call order deterministic in unit tests without a GPU, ROCm, model weights,
+network, or real binaries.
 
 ## Versioning and schemas
 
