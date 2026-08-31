@@ -12,7 +12,6 @@ import secrets
 import selectors
 import signal
 import socket
-import stat
 import subprocess
 import sys
 import threading
@@ -25,13 +24,21 @@ from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
-from strixlab.adapters._executable_identity import (
+from strixlab.evidence import RunSession
+from strixlab.executable_identity import (
     ExecutableIdentity,
     hash_executable,
     require_stable_executable,
 )
-from strixlab.evidence import RunSession
 from strixlab.manifests import AbsolutePathString, DashId
+from strixlab.models import (
+    ModelError,
+    ModelLease,
+    ModelReceiptEvidenceV1,
+    ModelReceiptV1,
+    lease_verified_model,
+    require_receipt_inputs_match,
+)
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
 from strixlab.serialization import canonical_json_bytes
 
@@ -162,7 +169,9 @@ class LlamaServerInputsV1(_Model):
     model_id: DashId
     model_path: AbsolutePathString
     model_sha256: Sha256Hex
-    model_digest_status: Literal["asserted"] = "asserted"
+    model_digest_status: Literal["verified"] = "verified"
+    model_receipt_sha256: Sha256Hex
+    model_receipt_evidence: ModelReceiptEvidenceV1
 
 
 class LlamaServerCapabilitiesV1(_Model):
@@ -313,15 +322,6 @@ class LlamaServerSampleV1(_Model):
 
 
 @dataclass(frozen=True, slots=True)
-class _ModelIdentity:
-    dev: int
-    ino: int
-    size: int
-    mtime_ns: int
-    ctime_ns: int
-
-
-@dataclass(frozen=True, slots=True)
 class _HttpResult:
     status: int | None
     body: bytes
@@ -447,32 +447,13 @@ def _write_stream_evidence(evidence: _Evidence, name: str, state: _StreamState) 
     evidence.write(f"server/{name}.bin", content, "application/octet-stream")
 
 
-def _model_identity(path: Path) -> _ModelIdentity:
-    try:
-        metadata = os.lstat(path)
-    except OSError as exc:
-        raise LlamaServerIntegrityError(f"model file is unavailable: {path}") from exc
-    if not stat.S_ISREG(metadata.st_mode):
-        raise LlamaServerIntegrityError(f"model path is not a regular file: {path}")
-    return _ModelIdentity(
-        metadata.st_dev,
-        metadata.st_ino,
-        metadata.st_size,
-        metadata.st_mtime_ns,
-        metadata.st_ctime_ns,
-    )
-
-
-def _recheck(
-    binary_path: Path, binary: ExecutableIdentity, model_path: Path, model: _ModelIdentity
-) -> None:
+def _recheck(binary_path: Path, binary: ExecutableIdentity, lease: ModelLease) -> None:
+    # A lease.verify() drift raises ModelError, translated to the adapter integrity error
+    # by run_llama_server_case's outer boundary.
     require_stable_executable(
         binary_path, binary, error=LlamaServerIntegrityError, subject="server binary"
     )
-    if _model_identity(model_path) != model:
-        raise LlamaServerIntegrityError(
-            f"model file drifted across the server window: {model_path}"
-        )
+    lease.verify()
 
 
 def _validate_timeout(value: float, name: str) -> None:
@@ -776,6 +757,7 @@ def _attempt_from_http(
 def _finalize(
     evidence: _Evidence,
     *,
+    lease: ModelLease,
     status: SampleStatus,
     reason: str,
     case: LlamaServerCaseV1,
@@ -796,6 +778,10 @@ def _finalize(
         lifecycle=lifecycle,
         artifacts=tuple(evidence.artifacts),
     )
+    # lease.verify() runs immediately before the terminal write, so finalizer-time drift
+    # raises the integrity error (via the runner's outer boundary) before ``sample.json``
+    # exists.
+    lease.verify()
     evidence.json("sample.json", sample.model_dump(mode="json"))
     return sample
 
@@ -804,6 +790,7 @@ def run_llama_server_case(
     *,
     case: LlamaServerCaseV1,
     inputs: LlamaServerInputsV1,
+    receipt: ModelReceiptV1,
     run: RunSession,
     environment: Mapping[str, str],
     cwd: Path,
@@ -814,7 +801,13 @@ def run_llama_server_case(
     shutdown_timeout: float,
     nonce_factory: Callable[[], str] = lambda: secrets.token_hex(16),
 ) -> LlamaServerSampleV1:
-    """Run one bounded two-request local-server case; the caller owns ``run``."""
+    """Run one bounded two-request local-server case; the caller owns ``run``.
+
+    The verified ``receipt`` is bound to ``inputs`` and held across the whole child
+    lifetime through :func:`lease_verified_model`, so the long-lived ``llama-server``
+    child opens the receipt-bound inode via ``/proc/self/fd/<fd>`` even if the public
+    pathname is swapped mid-run. Integrity drift propagates without a ``sample.json``.
+    """
 
     for name, value in (
         ("capability_timeout", capability_timeout),
@@ -823,16 +816,65 @@ def run_llama_server_case(
         ("shutdown_timeout", shutdown_timeout),
     ):
         _validate_timeout(value, name)
-    argv = build_server_argv(
-        binary_path=inputs.binary_path, model_path=inputs.model_path, port=port, case=case
-    )
-    sentinels = _sentinels(case.prompt, nonce_factory)
     binary_path = Path(inputs.binary_path)
-    model_path = Path(inputs.model_path)
     binary = hash_executable(binary_path, error=LlamaServerIntegrityError, subject="server binary")
     if binary.sha256 != inputs.binary_sha256:
         raise LlamaServerIntegrityError("server binary SHA-256 does not match input binding")
-    model = _model_identity(model_path)
+    try:
+        require_receipt_inputs_match(
+            receipt,
+            model_id=inputs.model_id,
+            model_path=inputs.model_path,
+            model_sha256=inputs.model_sha256,
+            model_receipt_sha256=inputs.model_receipt_sha256,
+            model_receipt_evidence=inputs.model_receipt_evidence,
+        )
+    except ModelError as exc:
+        raise LlamaServerIntegrityError(str(exc)) from exc
+    sentinels = _sentinels(case.prompt, nonce_factory)
+    try:
+        with lease_verified_model(receipt) as lease:
+            return _drive_leased_server(
+                case=case,
+                inputs=inputs,
+                lease=lease,
+                binary_path=binary_path,
+                binary=binary,
+                sentinels=sentinels,
+                run=run,
+                environment=environment,
+                cwd=cwd,
+                port=port,
+                capability_timeout=capability_timeout,
+                readiness_timeout=readiness_timeout,
+                request_timeout=request_timeout,
+                shutdown_timeout=shutdown_timeout,
+            )
+    except ModelError as exc:
+        raise LlamaServerIntegrityError(str(exc)) from exc
+
+
+def _drive_leased_server(
+    *,
+    case: LlamaServerCaseV1,
+    inputs: LlamaServerInputsV1,
+    lease: ModelLease,
+    binary_path: Path,
+    binary: ExecutableIdentity,
+    sentinels: tuple[str, str],
+    run: RunSession,
+    environment: Mapping[str, str],
+    cwd: Path,
+    port: int,
+    capability_timeout: float,
+    readiness_timeout: float,
+    request_timeout: float,
+    shutdown_timeout: float,
+) -> LlamaServerSampleV1:
+    # The model operand is the receipt-bound descriptor, not the public path.
+    argv = build_server_argv(
+        binary_path=inputs.binary_path, model_path=lease.descriptor_path, port=port, case=case
+    )
     evidence = _Evidence(run, f"{EVIDENCE_ROOT}/{case.id}", [])
 
     version_p, version_out, version_err = _probe(
@@ -843,7 +885,7 @@ def run_llama_server_case(
         evidence=evidence,
         name="version",
     )
-    _recheck(binary_path, binary, model_path, model)
+    _recheck(binary_path, binary, lease)
     help_p, help_out, help_err = _probe(
         argv=(inputs.binary_path, "--help"),
         cwd=cwd,
@@ -868,10 +910,11 @@ def run_llama_server_case(
         version=version_p, help=help_p, capabilities=capabilities, reason=cap_reason
     )
     evidence.json("capabilities/attempt.json", capability.model_dump(mode="json"))
-    _recheck(binary_path, binary, model_path, model)
+    _recheck(binary_path, binary, lease)
     if capabilities is None:
         return _finalize(
             evidence,
+            lease=lease,
             status="capability-failed",
             reason=cap_reason or "capability failed",
             case=case,
@@ -882,9 +925,10 @@ def run_llama_server_case(
             lifecycle=None,
         )
     if not _port_available(port):
-        _recheck(binary_path, binary, model_path, model)
+        _recheck(binary_path, binary, lease)
         return _finalize(
             evidence,
+            lease=lease,
             status="port-unavailable",
             reason="loopback port is unavailable",
             case=case,
@@ -895,7 +939,7 @@ def run_llama_server_case(
             lifecycle=None,
         )
 
-    _recheck(binary_path, binary, model_path, model)
+    _recheck(binary_path, binary, lease)
     try:
         process = subprocess.Popen(
             argv,
@@ -905,11 +949,13 @@ def run_llama_server_case(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            pass_fds=(lease.descriptor,),
         )
     except OSError:
-        _recheck(binary_path, binary, model_path, model)
+        _recheck(binary_path, binary, lease)
         return _finalize(
             evidence,
+            lease=lease,
             status="spawn-failed",
             reason="server spawn failed",
             case=case,
@@ -994,7 +1040,7 @@ def run_llama_server_case(
 
         if ready:
             for ordinal, sentinel in enumerate(sentinels, 1):
-                _recheck(binary_path, binary, model_path, model)
+                _recheck(binary_path, binary, lease)
                 request = build_completion_request(case, sentinel)
                 request_sha256 = evidence.write(
                     f"requests/{ordinal:04d}/request.json", request, "application/json"
@@ -1105,7 +1151,7 @@ def run_llama_server_case(
                 if active_error is not None:
                     active_error.add_note(note)
             try:
-                _recheck(binary_path, binary, model_path, model)
+                _recheck(binary_path, binary, lease)
             except LlamaServerIntegrityError:
                 if active_error is None:
                     raise
@@ -1135,7 +1181,7 @@ def run_llama_server_case(
     _write_stream_evidence(evidence, "stdout", stdout_state)
     _write_stream_evidence(evidence, "stderr", stderr_state)
     evidence.json("server/process.json", lifecycle.model_dump(mode="json"))
-    _recheck(binary_path, binary, model_path, model)
+    _recheck(binary_path, binary, lease)
     if (
         lifecycle.capture_error is not None
         or lifecycle.stdout_truncated
@@ -1152,6 +1198,7 @@ def run_llama_server_case(
         primary_status, primary_reason = "shutdown-failed", "server shutdown was not graceful"
     return _finalize(
         evidence,
+        lease=lease,
         status=primary_status,
         reason=primary_reason,
         case=case,

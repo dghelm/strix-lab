@@ -9,6 +9,7 @@ from strixlab.manifests import (
     BuildProfileV1,
     MachineProfileV1,
     ManifestRegistry,
+    ModelManifestV1,
     SourceLockV1,
     UnknownManifestKind,
     resolve_and_validate_manifest,
@@ -49,7 +50,77 @@ def test_all_v1_manifests_validate(
 
 
 def test_registry_is_extensible_and_sorted() -> None:
-    assert ManifestRegistry.kinds() == ("build", "machine", "source-lock")
+    assert ManifestRegistry.kinds() == ("build", "machine", "model", "source-lock")
+
+
+def test_registered_model_resolves_and_keeps_raw_template(model_value: dict[str, Any]) -> None:
+    raw = validate_manifest("model", model_value)
+    assert raw.artifact.file.local_path == "${MODELS}/qwen35-2b/Qwen_Qwen3.5-2B-Q4_K_M.gguf"
+    resolved = resolve_and_validate_manifest("model", model_value, {"MODELS": "/data/models"})
+    assert isinstance(resolved, ModelManifestV1)
+    assert resolved.artifact.file.local_path == "/data/models/qwen35-2b/Qwen_Qwen3.5-2B-Q4_K_M.gguf"
+    assert resolved.registry_status == "registered"
+    assert resolved.quantization.is_fully_provenanced() is False
+
+
+def test_draft_model_forbids_local_identity(draft_model_value: dict[str, Any]) -> None:
+    draft = resolve_and_validate_manifest("model", draft_model_value, {})
+    assert draft.registry_status == "draft"
+    assert draft.artifact.file.local_path is None
+    with_path = {
+        **draft_model_value,
+        "artifact": {"format": "gguf", "file": {"local_path": "/models/x.gguf"}},
+    }
+    with pytest.raises(ValidationError):
+        resolve_and_validate_manifest("model", with_path, {})
+
+
+def test_registered_model_requires_full_identity(model_value: dict[str, Any]) -> None:
+    broken = {
+        **model_value,
+        "artifact": {
+            "format": "gguf",
+            "file": {k: v for k, v in model_value["artifact"]["file"].items() if k != "sha256"},
+            "metadata_predicates": model_value["artifact"]["metadata_predicates"],
+        },
+    }
+    with pytest.raises(ValidationError):
+        resolve_and_validate_manifest("model", broken, {"MODELS": "/data/models"})
+
+
+def test_model_rejects_sensitive_interpolation(model_value: dict[str, Any]) -> None:
+    poisoned = {
+        **model_value,
+        "artifact": {
+            **model_value["artifact"],
+            "file": {**model_value["artifact"]["file"], "local_path": "${API_TOKEN}/x.gguf"},
+        },
+    }
+    with pytest.raises(SensitiveInterpolationError):
+        resolve_and_validate_manifest("model", poisoned, {"API_TOKEN": "secret"})
+
+
+def test_model_predicate_shape_is_strict(model_value: dict[str, Any]) -> None:
+    bad = {
+        **model_value,
+        "artifact": {
+            **model_value["artifact"],
+            "metadata_predicates": [
+                {"key": "k", "value_type": "STRING", "scalar_value": "s", "array_types": ["INT32"]}
+            ],
+        },
+    }
+    with pytest.raises(ValidationError):
+        validate_manifest("model", bad)
+    bool_as_int = {
+        **model_value,
+        "artifact": {
+            **model_value["artifact"],
+            "metadata_predicates": [{"key": "k", "value_type": "UINT32", "scalar_value": True}],
+        },
+    }
+    with pytest.raises(ValidationError):
+        validate_manifest("model", bool_as_int)
 
 
 def test_registry_rejects_duplicate_kind_and_version() -> None:

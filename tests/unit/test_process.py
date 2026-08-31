@@ -175,3 +175,27 @@ time.sleep(30)
     assert result.stdout.count("child=") == 1
     assert result.duration >= 2.0
     assert result.duration < 5.0
+
+
+def test_explicit_base_env_is_baseline_without_inheritance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An explicit base_env under inherit_env=False is the child's environment baseline
+    # (regression: it was previously dropped), and env_overrides still overlay/remove.
+    monkeypatch.setenv("STRIXLAB_LEAKED", "must-not-appear")
+    source = "import json, os; print(json.dumps(dict(os.environ)))"
+    result = run_process(
+        python_command(source),
+        cwd=tmp_path,
+        inherit_env=False,
+        base_env={"LANG": "C", "KEEP": "kept", "DROP": "gone"},
+        env_overrides={"DROP": None, "ADD": "added"},
+    )
+    env = json.loads(result.stdout)
+    # The base_env is delivered (KEEP), overrides overlay (ADD) and remove (DROP), and
+    # nothing is inherited (LEAKED absent). LC_CTYPE is added by CPython locale coercion.
+    assert env["LANG"] == "C"
+    assert env["KEEP"] == "kept"
+    assert env["ADD"] == "added"
+    assert "DROP" not in env
+    assert "STRIXLAB_LEAKED" not in env

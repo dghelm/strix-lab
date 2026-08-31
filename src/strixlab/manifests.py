@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, Self
+from typing import Annotated, Any, ClassVar, Literal, Self, cast
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -390,6 +390,345 @@ class _RawBuildProfileV1(ManifestModel):
         return value
 
 
+# --- Model manifest v1 --------------------------------------------------------
+
+Sha256Lower = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+RepositoryId = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+]
+
+# The inspector's closed GGUF value-type vocabulary (``gguf.GGUFValueType`` names).
+GgufValueType = Literal[
+    "UINT8",
+    "INT8",
+    "UINT16",
+    "INT16",
+    "UINT32",
+    "INT32",
+    "FLOAT32",
+    "BOOL",
+    "STRING",
+    "ARRAY",
+    "UINT64",
+    "INT64",
+    "FLOAT64",
+]
+_GGUF_INTEGER_TYPES = frozenset(
+    {"UINT8", "INT8", "UINT16", "INT16", "UINT32", "INT32", "UINT64", "INT64"}
+)
+_GGUF_FLOAT_TYPES = frozenset({"FLOAT32", "FLOAT64"})
+
+
+def _check_scalar_type_agreement(value_type: str, value: object) -> None:
+    if value_type in _GGUF_INTEGER_TYPES:
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError(f"scalar_value must be an integer for value_type {value_type}")
+    elif value_type in _GGUF_FLOAT_TYPES:
+        if not isinstance(value, float):
+            raise ValueError(f"scalar_value must be a float for value_type {value_type}")
+    elif value_type == "BOOL":
+        if not isinstance(value, bool):
+            raise ValueError("scalar_value must be a boolean for value_type BOOL")
+    else:  # STRING
+        if not isinstance(value, str):
+            raise ValueError("scalar_value must be a string for value_type STRING")
+
+
+class MetadataPredicateV1(ManifestModel):
+    """One strict, machine-checkable GGUF metadata predicate.
+
+    Exactly one of ``scalar_value`` (type-strict exact equality against the inspector's
+    scalar) or ``array_types`` (an exact match of the inspector's complete nested
+    element-type tuple, never array contents) is declared. No coercion, substring, or
+    numeric tolerance ever applies.
+    """
+
+    key: CleanString
+    value_type: GgufValueType
+    scalar_value: StrictBool | StrictInt | StrictFloat | StrictStr | None = None
+    array_types: list[GgufValueType] | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_shape(self) -> Self:
+        has_scalar = self.scalar_value is not None
+        has_array = self.array_types is not None
+        if has_scalar == has_array:
+            raise ValueError("predicate must declare exactly one of scalar_value or array_types")
+        if has_array:
+            if self.value_type != "ARRAY":
+                raise ValueError("an array predicate must use value_type ARRAY")
+            if not self.array_types:
+                raise ValueError("array_types must be nonempty")
+        else:
+            if self.value_type == "ARRAY":
+                raise ValueError("a scalar predicate cannot use value_type ARRAY")
+            assert self.scalar_value is not None
+            _check_scalar_type_agreement(self.value_type, self.scalar_value)
+        return self
+
+
+def _unique_predicate_keys(value: list[MetadataPredicateV1]) -> list[MetadataPredicateV1]:
+    keys = [predicate.key for predicate in value]
+    if len(keys) != len(set(keys)):
+        raise ValueError("metadata predicate keys must be unique")
+    return value
+
+
+def _check_sidecar_consistency(
+    *, inspection: str, sidecar_format: str, kind: str, has_predicates: bool
+) -> None:
+    """Shared sidecar inspection/kind/predicate invariant for the raw and public models."""
+
+    if inspection == "gguf":
+        if sidecar_format != "gguf" or kind != "mmproj":
+            raise ValueError("gguf inspection requires an mmproj sidecar in gguf format")
+    elif has_predicates:
+        raise ValueError("a hash-only sidecar cannot declare metadata predicates")
+
+
+class ModelBaseV1(ManifestModel):
+    repository: RepositoryId
+    revision: CommitSha
+    license: CleanString
+
+
+class ModelArchitectureV1(ManifestModel):
+    family: UnderscoreId
+    moe: StrictBool
+    gated_deltanet: StrictBool
+    full_attention: StrictBool
+    qsa: StrictBool
+    mtp: StrictBool
+    vision: StrictBool
+
+
+class ModelFileIdentityV1(ManifestModel):
+    repository: RepositoryId | None = None
+    revision: CommitSha | None = None
+    filename: CleanString | None = None
+    local_path: AbsolutePathString | None = None
+    size_bytes: Annotated[StrictInt, Field(gt=0)] | None = None
+    sha256: Sha256Lower | None = None
+
+
+class ModelArtifactV1(ManifestModel):
+    format: Literal["gguf"]
+    file: ModelFileIdentityV1
+    metadata_predicates: Annotated[
+        list[MetadataPredicateV1], AfterValidator(_unique_predicate_keys)
+    ] = Field(default_factory=list)
+
+
+class ModelSidecarV1(ManifestModel):
+    id: DashId
+    kind: Literal["mmproj", "imatrix", "opaque"]
+    format: Literal["gguf", "opaque"]
+    file: ModelFileIdentityV1
+    inspection: Literal["gguf", "hash-only"]
+    metadata_predicates: Annotated[
+        list[MetadataPredicateV1], AfterValidator(_unique_predicate_keys)
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _consistent_sidecar(self) -> Self:
+        _check_sidecar_consistency(
+            inspection=self.inspection,
+            sidecar_format=self.format,
+            kind=self.kind,
+            has_predicates=bool(self.metadata_predicates),
+        )
+        return self
+
+
+_QUANT_UNKNOWN = "unknown"
+
+
+class ModelQuantizationV1(ManifestModel):
+    format_family: CleanString
+    storage_format: Literal["gguf"]
+    measured_bits_per_weight: Annotated[float, Field(gt=0)] | None = None
+    tensor_policy_id: CleanString
+    tensor_policy_source: CleanString
+    calibration_method: CleanString
+    calibration_source: CleanString
+    calibration_hash: Sha256Lower | Literal["unknown"]
+
+    def is_fully_provenanced(self) -> bool:
+        """True only when every quant-policy provenance field is explicitly known."""
+
+        return _QUANT_UNKNOWN not in {
+            self.tensor_policy_id,
+            self.tensor_policy_source,
+            self.calibration_method,
+            self.calibration_source,
+            self.calibration_hash,
+        }
+
+
+class ModelExecutionV1(ManifestModel):
+    verification_status: Literal["unverified"]
+    required_sources: Annotated[
+        list[CleanString], Field(default_factory=list, json_schema_extra={"uniqueItems": True})
+    ]
+    required_features: Annotated[
+        list[CleanString], Field(default_factory=list, json_schema_extra={"uniqueItems": True})
+    ]
+
+    @model_validator(mode="after")
+    def _unique_requirements(self) -> Self:
+        for name, values in (
+            ("required_sources", self.required_sources),
+            ("required_features", self.required_features),
+        ):
+            if len(values) != len(set(values)):
+                raise ValueError(f"{name} entries must be unique")
+        return self
+
+
+def _apply_model_manifest_invariants(manifest: ModelManifestV1) -> None:
+    """Validate the registered/draft variant selected by ``registry_status``.
+
+    Shared by the resolved public model and the raw pre-resolution model so both stages
+    enforce the same identity discipline: a registered manifest pins full upstream and
+    local identity and carries no draft reason; a draft carries a bounded reason and no
+    local identity, receipt predicate, or sidecar.
+    """
+
+    artifact = manifest.artifact
+    file = artifact.file
+    predicates_present = bool(artifact.metadata_predicates) or any(
+        sidecar.metadata_predicates for sidecar in manifest.sidecars
+    )
+    if manifest.registry_status == "registered":
+        if manifest.draft_reason is not None:
+            raise ValueError("a registered manifest cannot declare a draft_reason")
+        if manifest.base_model is None:
+            raise ValueError("a registered manifest requires base_model identity")
+        if manifest.architecture is None:
+            raise ValueError("a registered manifest requires an architecture")
+        missing = [
+            name
+            for name, value in (
+                ("repository", file.repository),
+                ("revision", file.revision),
+                ("filename", file.filename),
+                ("local_path", file.local_path),
+                ("size_bytes", file.size_bytes),
+                ("sha256", file.sha256),
+            )
+            if value is None
+        ]
+        if missing:
+            raise ValueError(f"a registered artifact requires {', '.join(missing)}")
+        for sidecar in manifest.sidecars:
+            side = sidecar.file
+            if side.local_path is None or side.size_bytes is None or side.sha256 is None:
+                raise ValueError("a registered sidecar requires local_path, size_bytes, and sha256")
+    else:  # draft
+        if manifest.draft_reason is None:
+            raise ValueError("a draft manifest requires a draft_reason")
+        if file.local_path is not None or file.size_bytes is not None or file.sha256 is not None:
+            raise ValueError("a draft manifest cannot declare local artifact identity")
+        if predicates_present:
+            raise ValueError("a draft manifest cannot declare metadata predicates")
+        if manifest.sidecars:
+            raise ValueError("a draft manifest cannot declare sidecars")
+
+    paths = [file.local_path] if file.local_path is not None else []
+    ids = [sidecar.id for sidecar in manifest.sidecars]
+    if len(ids) != len(set(ids)):
+        raise ValueError("sidecar ids must be unique")
+    for sidecar in manifest.sidecars:
+        if sidecar.file.local_path is not None:
+            if sidecar.file.local_path in paths:
+                raise ValueError("sidecar local_path cannot alias another artifact")
+            paths.append(sidecar.file.local_path)
+
+
+class ModelManifestV1(ManifestModel):
+    schema_version: Literal[1]
+    id: DashId
+    registry_status: Literal["registered", "draft"]
+    base_model: ModelBaseV1 | None = None
+    architecture: ModelArchitectureV1 | None = None
+    artifact: ModelArtifactV1
+    sidecars: list[ModelSidecarV1] = Field(default_factory=list)
+    quantization: ModelQuantizationV1
+    execution: ModelExecutionV1
+    quality_reference: DashId | None = None
+    draft_reason: CleanString | None = None
+
+    @model_validator(mode="after")
+    def _valid_variant(self) -> Self:
+        _apply_model_manifest_invariants(self)
+        return self
+
+
+class _RawModelFileIdentityV1(ManifestModel):
+    repository: RepositoryId | None = None
+    revision: CommitSha | None = None
+    filename: CleanString | None = None
+    local_path: RawAbsolutePathString | None = None
+    size_bytes: Annotated[StrictInt, Field(gt=0)] | None = None
+    sha256: Sha256Lower | None = None
+
+
+class _RawModelArtifactV1(ManifestModel):
+    format: Literal["gguf"]
+    file: _RawModelFileIdentityV1
+    metadata_predicates: Annotated[
+        list[MetadataPredicateV1], AfterValidator(_unique_predicate_keys)
+    ] = Field(default_factory=list)
+
+
+class _RawModelSidecarV1(ManifestModel):
+    id: DashId
+    kind: Literal["mmproj", "imatrix", "opaque"]
+    format: Literal["gguf", "opaque"]
+    file: _RawModelFileIdentityV1
+    inspection: Literal["gguf", "hash-only"]
+    metadata_predicates: Annotated[
+        list[MetadataPredicateV1], AfterValidator(_unique_predicate_keys)
+    ] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _consistent_sidecar(self) -> Self:
+        _check_sidecar_consistency(
+            inspection=self.inspection,
+            sidecar_format=self.format,
+            kind=self.kind,
+            has_predicates=bool(self.metadata_predicates),
+        )
+        return self
+
+
+class _RawModelManifestV1(ManifestModel):
+    schema_version: Literal[1]
+    id: DashId
+    registry_status: Literal["registered", "draft"]
+    base_model: ModelBaseV1 | None = None
+    architecture: ModelArchitectureV1 | None = None
+    artifact: _RawModelArtifactV1
+    sidecars: list[_RawModelSidecarV1] = Field(default_factory=list)
+    quantization: ModelQuantizationV1
+    execution: ModelExecutionV1
+    quality_reference: DashId | None = None
+    draft_reason: CleanString | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def valid_interpolation_grammar(cls, value: Any) -> Any:
+        names = _raw_environment_names(value)
+        sentinel_environment = {name: f"/__strixlab_environment__/{name}" for name in names}
+        resolve_environment(value, sentinel_environment)
+        return value
+
+    @model_validator(mode="after")
+    def _valid_variant(self) -> Self:
+        _apply_model_manifest_invariants(cast("ModelManifestV1", self))
+        return self
+
+
 class UnknownManifestKind(ValueError):
     """Raised when no manifest kind is registered."""
 
@@ -428,14 +767,21 @@ class ManifestRegistry:
 ManifestRegistry.register("source-lock", 1, SourceLockV1)
 ManifestRegistry.register("machine", 1, MachineProfileV1)
 ManifestRegistry.register("build", 1, BuildProfileV1)
+ManifestRegistry.register("model", 1, ModelManifestV1)
+
+_RAW_MODELS: dict[str, type[ManifestModel]] = {
+    "build": _RawBuildProfileV1,
+    "model": _RawModelManifestV1,
+}
 
 
 def validate_manifest(kind: str, value: Mapping[str, Any]) -> ManifestModel:
     """Validate one already-parsed raw manifest without resolving its values."""
 
-    if kind == "build":
+    raw_model = _RAW_MODELS.get(kind)
+    if raw_model is not None:
         ManifestRegistry.model_for(kind, value.get("schema_version"))
-        return _RawBuildProfileV1.model_validate(value)
+        return raw_model.model_validate(value)
     return ManifestRegistry.validate(kind, value)
 
 
@@ -446,7 +792,7 @@ def resolve_and_validate_manifest(
 ) -> ManifestModel:
     """Validate raw structure, resolve trusted values, then validate the result."""
 
-    if kind == "build":
+    if kind in _RAW_MODELS:
         validate_manifest(kind, value)
         reject_sensitive_interpolations(value)
     resolved = resolve_environment(dict(value), environ)

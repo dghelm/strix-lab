@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -11,11 +12,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _model_fixtures import build_verified_receipt
 from pydantic import ValidationError
 
 import strixlab.adapters.llama_bench as lb
 import strixlab.evidence as ev
 from strixlab.bundles import export_bundle, verify_bundle
+from strixlab.models import ModelReceiptEvidenceV1, ModelReceiptV1, receipt_evidence_digest
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
 from strixlab.serialization import canonical_json_bytes
 
@@ -84,10 +87,13 @@ def write_binary(
         f"if '--help' in argv:\n    sys.stdout.write({help_text!r})\n    sys.exit({help_rc})\n"
         f"if '--version' in argv:\n    sys.stderr.write({version_stderr!r})\n"
         f"    sys.exit({version_rc})\n"
+        # Echo the effective -m operand (the /proc/self/fd path) as the tool would, so
+        # '@MODEL@' in the benchmark stdout stands in for whatever the runner passed.
+        "operand = argv[argv.index('-m') + 1] if '-m' in argv else ''\n"
         f"time.sleep({bench_sleep!r})\n"
         f"_raw = {raw}\n"
         "if _raw is not None:\n    sys.stdout.buffer.write(_raw)\n"
-        f"else:\n    sys.stdout.write({bench_stdout!r})\n"
+        f"else:\n    sys.stdout.write({bench_stdout!r}.replace('@MODEL@', operand))\n"
         f"sys.stderr.write({bench_stderr!r})\n"
         f"sys.exit({bench_rc})\n"
     )
@@ -97,18 +103,22 @@ def write_binary(
     return path, _sha256(path)
 
 
-def make_inputs(
-    binary: Path, binary_sha: str, model: Path, *, model_sha: str = "b" * 64
-) -> lb.LlamaBenchInputsV1:
+def make_inputs(binary: Path, binary_sha: str, receipt: ModelReceiptV1) -> lb.LlamaBenchInputsV1:
     return lb.LlamaBenchInputsV1(
         build_id="build-sha256:" + "a" * 64,
         source_commit=lb.SOURCE_ANCHOR_COMMIT,
         binary_path=str(binary),
         binary_sha256=binary_sha,
-        model_id="qwen35-4b-smoke",
-        model_path=str(model),
-        model_sha256=model_sha,
+        model_id=receipt.manifest_id,
+        model_path=receipt.primary.local_path,
+        model_sha256=receipt.primary.sha256,
+        model_receipt_sha256=receipt_evidence_digest(receipt.evidence),
+        model_receipt_evidence=receipt.evidence,
     )
+
+
+def receipt_for(model: Path) -> ModelReceiptV1:
+    return build_verified_receipt(model.parent, model)
 
 
 def begin(home: Path, *, environ: Mapping[str, str] | None = None) -> ev.RunSession:
@@ -139,12 +149,14 @@ def run_case(
     runner: lb.ProcessRunner = run_process,
     capability_timeout: float = 10.0,
     benchmark_timeout: float = 10.0,
-    model_sha: str = "b" * 64,
+    receipt: ModelReceiptV1 | None = None,
 ) -> lb.LlamaBenchSampleV1:
-    inputs = make_inputs(binary, sha, model, model_sha=model_sha)
+    receipt = receipt or receipt_for(model)
+    inputs = make_inputs(binary, sha, receipt)
     return lb.run_llama_bench_case(
         case=case,
         inputs=inputs,
+        receipt=receipt,
         run=run,
         environment=environment or _CHILD_ENV,
         cwd=binary.parent,
@@ -267,14 +279,15 @@ def test_case_bounds_are_enforced() -> None:
         )
 
 
-def test_inputs_label_model_digest_asserted_and_reject_bad_fields() -> None:
-    model = Path("/models/x.gguf")
-    inputs = make_inputs(Path("/bin/llama-bench"), "a" * 64, model)
-    assert inputs.model_digest_status == "asserted"
+def test_inputs_label_model_digest_verified_and_reject_bad_fields(tmp_path: Path) -> None:
+    receipt = receipt_for(make_model(tmp_path))
+    inputs = make_inputs(Path("/bin/llama-bench"), "a" * 64, receipt)
+    assert inputs.model_digest_status == "verified"
+    assert inputs.model_receipt_sha256 == receipt_evidence_digest(receipt.evidence)
     with pytest.raises(ValidationError):
-        make_inputs(Path("relative/llama-bench"), "a" * 64, model)
+        make_inputs(Path("relative/llama-bench"), "a" * 64, receipt)
     with pytest.raises(ValidationError):
-        make_inputs(Path("/bin/llama-bench"), "z" * 64, model)  # non-hex sha
+        make_inputs(Path("/bin/llama-bench"), "z" * 64, receipt)  # non-hex sha
     with pytest.raises(ValidationError):
         lb.LlamaBenchInputsV1(
             build_id="nope",
@@ -284,6 +297,8 @@ def test_inputs_label_model_digest_asserted_and_reject_bad_fields() -> None:
             model_id="m",
             model_path="/models/x.gguf",
             model_sha256="b" * 64,
+            model_receipt_sha256="a" * 64,
+            model_receipt_evidence=receipt.evidence,
         )
 
 
@@ -468,7 +483,7 @@ def test_readme_documentation_fixture_is_not_adapter_valid() -> None:
 
 def test_success_writes_evidence_and_binds_case(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout)
     home = tmp_path / "home"
     with begin(home) as run:
@@ -480,7 +495,7 @@ def test_success_writes_evidence_and_binds_case(tmp_path: Path) -> None:
     assert sample.reason == "success"
     assert sample.measurement is not None
     assert len(sample.measurement.samples_ts) == 3
-    assert sample.inputs.model_digest_status == "asserted"
+    assert sample.inputs.model_digest_status == "verified"
     assert sample.invocation is not None
     assert sample.invocation.argv[-2:] == ("-o", "jsonl")
     assert sample.capabilities is not None
@@ -495,7 +510,7 @@ def test_success_writes_evidence_and_binds_case(tmp_path: Path) -> None:
 
 def test_success_run_finalizes_exports_and_verifies_offline(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout)
     home = tmp_path / "home"
     with begin(home) as run:
@@ -512,7 +527,7 @@ def test_success_run_finalizes_exports_and_verifies_offline(tmp_path: Path) -> N
 
 def test_adapter_does_not_finalize_the_session(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout)
     home = tmp_path / "home"
     with begin(home) as run:
@@ -525,7 +540,7 @@ def test_adapter_does_not_finalize_the_session(tmp_path: Path) -> None:
 
 def test_runner_uses_bounded_limits_and_never_spools(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout)
     calls: list[dict[str, object]] = []
 
@@ -758,7 +773,7 @@ def test_hash_binary_requires_complete_metadata_stability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_field: str
 ) -> None:
     binary, _ = write_binary(tmp_path, bench_stdout="{}\n")
-    real_fstat = lb.os.fstat
+    real_fstat = os.fstat
     calls = 0
 
     def changed_fstat(descriptor: int) -> object:
@@ -778,14 +793,14 @@ def test_hash_binary_requires_complete_metadata_stability(
         values[changed_field] += 1
         return SimpleNamespace(**values)
 
-    monkeypatch.setattr(lb.os, "fstat", changed_fstat)
+    monkeypatch.setattr(os, "fstat", changed_fstat)
     with pytest.raises(lb.LlamaBenchIntegrityError, match="changed while hashing"):
         lb._hash_binary(binary)
 
 
 def test_binary_drift_after_final_child_leaves_no_sample(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout)
 
     def drift_runner(argv: tuple[str, ...], **kwargs: object) -> ProcessResult:
@@ -857,11 +872,11 @@ def test_model_metadata_drift_is_detected(tmp_path: Path) -> None:
 
     home = tmp_path / "home"
     with begin(home) as run:
-        with pytest.raises(lb.LlamaBenchIntegrityError, match="model file drifted"):
+        with pytest.raises(lb.LlamaBenchIntegrityError, match="drifted"):
             run_case(run, binary, sha, model, runner=drift_runner)
         run.fail("integrity")
-    # The asserted model digest is never upgraded to verified by this adapter.
-    assert lb.LlamaBenchInputsV1.model_fields["model_digest_status"].default == "asserted"
+    # The model digest is verified against a MODEL-001 receipt, never merely asserted.
+    assert lb.LlamaBenchInputsV1.model_fields["model_digest_status"].default == "verified"
 
 
 # --- secret boundary ----------------------------------------------------------
@@ -869,7 +884,7 @@ def test_model_metadata_drift_is_detected(tmp_path: Path) -> None:
 
 def test_sensitive_output_fails_through_evidence_secret_boundary(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    leaking = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3).replace(
+    leaking = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3).replace(
         '"build_commit": "ca94157f"', f'"build_commit": "{_SECRET}"'
     )
     binary, sha = write_binary(tmp_path, bench_stdout=leaking)
@@ -914,7 +929,39 @@ def _projection(**overrides: object) -> lb.ProcessProjectionV1:
 _CAPS = lb.LlamaBenchCapabilitiesV1(
     binary_sha256="c" * 64, advertised_output_modes=lb.EXPECTED_OUTPUT_MODES
 )
-_INPUTS = make_inputs(Path("/bin/llama-bench"), "a" * 64, Path("/models/x.gguf"))
+_EVIDENCE = ModelReceiptEvidenceV1(
+    manifest_id="qwen35-4b-smoke",
+    manifest_sha256="d" * 64,
+    primary_local_path="/models/x.gguf",
+    primary_sha256="b" * 64,
+    primary_size_bytes=16,
+    endian="LITTLE",
+    inspector_stdout_sha256="f" * 64,
+    metadata_sha256="e" * 64,
+    metadata_key_count=9,
+    tensor_count=2,
+    tensor_type_counts=(("F16", 1), ("F32", 1)),
+    sidecars=(),
+    compatibility="verified",
+    publishable=False,
+    inspector_python_sha256="1" * 64,
+    inspector_script_sha256="2" * 64,
+    source_preparation_id="prep-strix-llama-" + "a" * 24,
+    source_candidate_id="candidate-sha256:" + "1" * 64,
+    source_content_tree_id="content-tree-sha256:" + "2" * 64,
+    source_base_commit=lb.SOURCE_ANCHOR_COMMIT,
+)
+_INPUTS = lb.LlamaBenchInputsV1(
+    build_id="build-sha256:" + "a" * 64,
+    source_commit=lb.SOURCE_ANCHOR_COMMIT,
+    binary_path="/bin/llama-bench",
+    binary_sha256="a" * 64,
+    model_id="qwen35-4b-smoke",
+    model_path="/models/x.gguf",
+    model_sha256="b" * 64,
+    model_receipt_sha256=receipt_evidence_digest(_EVIDENCE),
+    model_receipt_evidence=_EVIDENCE,
+)
 
 
 def _attempt(**overrides: object) -> lb.LlamaBenchCapabilityAttemptV1:
@@ -1037,7 +1084,7 @@ def test_help_nonzero_exit_is_capability_failed(tmp_path: Path) -> None:
 
 def test_large_stderr_stream_is_output_truncated(tmp_path: Path) -> None:
     model = make_model(tmp_path)
-    stdout = valid_jsonl(str(model), n_prompt=512, n_gen=0, reps=3)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
     binary, sha = write_binary(tmp_path, bench_stdout=stdout, bench_stderr="e\n" * (200 * 1024))
     home = tmp_path / "home"
     with begin(home) as run:
@@ -1065,10 +1112,62 @@ def test_integrity_rejects_missing_and_nonregular_paths(tmp_path: Path) -> None:
         # Binary path is a directory.
         with pytest.raises(lb.LlamaBenchIntegrityError, match="not a regular file"):
             run_case(run, a_directory, good_sha, good_model)
-        # Missing model path.
+        # A verified model that disappears before the lease opens fails closed.
+        vanish_dir = tmp_path / "vanish"
+        vanish_dir.mkdir()
+        vanishing = make_model(vanish_dir)
+        receipt = receipt_for(vanishing)
+        vanishing.unlink()
         with pytest.raises(lb.LlamaBenchIntegrityError, match="model file is unavailable"):
-            run_case(run, good_binary, good_sha, tmp_path / "missing-model")
-        # Model path is a directory.
+            run_case(run, good_binary, good_sha, vanishing, receipt=receipt)
+        # A verified model replaced by a directory fails closed.
+        vanishing.mkdir()
         with pytest.raises(lb.LlamaBenchIntegrityError, match="model path is not a regular file"):
-            run_case(run, good_binary, good_sha, a_directory)
+            run_case(run, good_binary, good_sha, vanishing, receipt=receipt)
+        run.fail("integrity")
+
+
+def test_receipt_input_mismatch_leaves_no_sample(tmp_path: Path) -> None:
+    model = make_model(tmp_path)
+    receipt = receipt_for(model)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
+    binary, sha = write_binary(tmp_path, bench_stdout=stdout)
+    # Inputs claim a different model SHA than the receipt substantiates.
+    inputs = make_inputs(binary, sha, receipt).model_copy(update={"model_sha256": "0" * 64})
+    home = tmp_path / "home"
+    with begin(home) as run:
+        with pytest.raises(lb.LlamaBenchIntegrityError):
+            lb.run_llama_bench_case(
+                case=CASE_PP,
+                inputs=inputs,
+                receipt=receipt,
+                run=run,
+                environment=_CHILD_ENV,
+                cwd=binary.parent,
+                capability_timeout=10.0,
+                benchmark_timeout=10.0,
+            )
+        assert f"adapters/llama-bench/{CASE_PP.id}/sample.json" not in logical_paths(run)
+        run.fail("integrity")
+
+
+def test_finalizer_lease_drift_leaves_no_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = make_model(tmp_path)
+    receipt = receipt_for(model)
+    stdout = valid_jsonl("@MODEL@", n_prompt=512, n_gen=0, reps=3)
+    binary, sha = write_binary(tmp_path, bench_stdout=stdout)
+    original = lb._finalize_sample
+
+    def drifting(evidence: object, **kwargs: object) -> object:
+        model.write_bytes(b"x" * 99)  # drift after the final recheck, before the gate
+        return original(evidence, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(lb, "_finalize_sample", drifting)
+    home = tmp_path / "home"
+    with begin(home) as run:
+        with pytest.raises(lb.LlamaBenchIntegrityError):
+            run_case(run, binary, sha, model, receipt=receipt)
+        assert f"adapters/llama-bench/{CASE_PP.id}/sample.json" not in logical_paths(run)
         run.fail("integrity")

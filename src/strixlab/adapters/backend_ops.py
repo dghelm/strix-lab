@@ -36,12 +36,12 @@ from pydantic import (
     model_validator,
 )
 
-from strixlab.adapters._executable_identity import (
+from strixlab.evidence import RunSession
+from strixlab.executable_identity import (
     ExecutableIdentity,
     hash_executable,
     require_stable_executable,
 )
-from strixlab.evidence import RunSession
 from strixlab.manifests import AbsolutePathString, DashId
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
 from strixlab.serialization import canonical_json_bytes

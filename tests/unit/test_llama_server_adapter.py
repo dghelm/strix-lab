@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _model_fixtures import build_verified_receipt
 from pydantic import ValidationError
 
 from strixlab.adapters import llama_server as llama_server_module
@@ -26,6 +27,7 @@ from strixlab.adapters.llama_server import (
     parse_version_capability,
     run_llama_server_case,
 )
+from strixlab.models import ModelReceiptV1, receipt_evidence_digest
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "llama_server" / "ca94157"
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -203,14 +205,20 @@ server.server_close()
     return path
 
 
-def _inputs(binary: Path, model: Path) -> LlamaServerInputsV1:
+def _receipt(model: Path) -> ModelReceiptV1:
+    return build_verified_receipt(model.parent, model, model_id="tiny-model")
+
+
+def _inputs(binary: Path, receipt: ModelReceiptV1) -> LlamaServerInputsV1:
     return LlamaServerInputsV1(
         build_id=f"build-sha256:{'1' * 64}",
         binary_path=str(binary),
         binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
-        model_id="tiny-model",
-        model_path=str(model),
-        model_sha256="2" * 64,
+        model_id=receipt.manifest_id,
+        model_path=receipt.primary.local_path,
+        model_sha256=receipt.primary.sha256,
+        model_receipt_sha256=receipt_evidence_digest(receipt.evidence),
+        model_receipt_evidence=receipt.evidence,
     )
 
 
@@ -232,11 +240,13 @@ def _execute(
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     run = _FakeRun()
     nonces = iter(("a" * 32, "b" * 32))
     sample = run_llama_server_case(
         case=CASE,
-        inputs=_inputs(binary, model),
+        inputs=_inputs(binary, receipt),
+        receipt=receipt,
         run=run,  # type: ignore[arg-type]
         environment={"FAKE_MODE": mode},
         cwd=tmp_path,
@@ -414,6 +424,7 @@ def test_port_refusal_is_structured(tmp_path: Path) -> None:
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     occupied.bind(("127.0.0.1", 0))
     port = int(occupied.getsockname()[1])
@@ -421,7 +432,8 @@ def test_port_refusal_is_structured(tmp_path: Path) -> None:
     try:
         sample = run_llama_server_case(
             case=CASE,
-            inputs=_inputs(binary, model),
+            inputs=_inputs(binary, receipt),
+            receipt=receipt,
             run=_FakeRun(),  # type: ignore[arg-type]
             environment={},
             cwd=tmp_path,
@@ -444,6 +456,7 @@ def test_port_refusal_rechecks_input_identity(
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     run = _FakeRun()
     nonces = iter(("a" * 32, "b" * 32))
 
@@ -455,7 +468,8 @@ def test_port_refusal_rechecks_input_identity(
     with pytest.raises(LlamaServerIntegrityError):
         run_llama_server_case(
             case=CASE,
-            inputs=_inputs(binary, model),
+            inputs=_inputs(binary, receipt),
+            receipt=receipt,
             run=run,  # type: ignore[arg-type]
             environment={},
             cwd=tmp_path,
@@ -475,6 +489,7 @@ def test_server_spawn_failure_is_structured(
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     real_popen = subprocess.Popen
     calls = 0
 
@@ -489,7 +504,8 @@ def test_server_spawn_failure_is_structured(
     nonces = iter(("a" * 32, "b" * 32))
     sample = run_llama_server_case(
         case=CASE,
-        inputs=_inputs(binary, model),
+        inputs=_inputs(binary, receipt),
+        receipt=receipt,
         run=_FakeRun(),  # type: ignore[arg-type]
         environment={},
         cwd=tmp_path,
@@ -509,12 +525,14 @@ def test_final_identity_drift_publishes_no_sample(tmp_path: Path) -> None:
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     run = _FakeRun()
     nonces = iter(("a" * 32, "b" * 32))
     with pytest.raises(LlamaServerIntegrityError):
         run_llama_server_case(
             case=CASE,
-            inputs=_inputs(binary, model),
+            inputs=_inputs(binary, receipt),
+            receipt=receipt,
             run=run,  # type: ignore[arg-type]
             environment={"FAKE_MODE": "drift-model"},
             cwd=tmp_path,
@@ -538,13 +556,15 @@ def test_evidence_failure_preserves_exception_and_reaps_server(
     binary = _write_server(tmp_path)
     model = tmp_path / "model.gguf"
     model.write_bytes(b"model")
+    receipt = _receipt(model)
     pid_file = tmp_path / "server.pid"
     run = _FailingRun(fail_suffix)
     nonces = iter(("a" * 32, "b" * 32))
     with pytest.raises(OSError, match="synthetic evidence failure"):
         run_llama_server_case(
             case=CASE,
-            inputs=_inputs(binary, model),
+            inputs=_inputs(binary, receipt),
+            receipt=receipt,
             run=run,  # type: ignore[arg-type]
             environment={"FAKE_MODE": mode, "PID_FILE": str(pid_file)},
             cwd=tmp_path,
@@ -565,3 +585,62 @@ def test_fixture_empty_streams_are_exact() -> None:
     assert (FIXTURES / "help.stderr.txt").read_bytes() == b""
     assert (FIXTURES / "version.stdout.txt").read_bytes() == b""
     assert hashlib.sha256(b"").hexdigest() == EMPTY_SHA256
+
+
+def test_server_receipt_input_mismatch_leaves_no_sample(tmp_path: Path) -> None:
+    binary = _write_server(tmp_path)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    receipt = _receipt(model)
+    inputs = _inputs(binary, receipt).model_copy(update={"model_sha256": "0" * 64})
+    run = _FakeRun()
+    with pytest.raises(LlamaServerIntegrityError):
+        run_llama_server_case(
+            case=CASE,
+            inputs=inputs,
+            receipt=receipt,
+            run=run,  # type: ignore[arg-type]
+            environment={},
+            cwd=tmp_path,
+            port=_port(),
+            capability_timeout=3.0,
+            readiness_timeout=3.0,
+            request_timeout=3.0,
+            shutdown_timeout=0.3,
+            nonce_factory=lambda: "a" * 32,
+        )
+    assert f"adapters/llama-server/{CASE.id}/sample.json" not in run.files
+
+
+def test_server_finalizer_lease_drift_leaves_no_sample(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    binary = _write_server(tmp_path)
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+    receipt = _receipt(model)
+    original = llama_server_module._finalize
+
+    def drifting(evidence: object, **kwargs: object) -> object:
+        model.write_bytes(b"model-has-now-drifted")  # drift after teardown, before gate
+        return original(evidence, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(llama_server_module, "_finalize", drifting)
+    run = _FakeRun()
+    nonces = iter(("a" * 32, "b" * 32))
+    with pytest.raises(LlamaServerIntegrityError):
+        run_llama_server_case(
+            case=CASE,
+            inputs=_inputs(binary, receipt),
+            receipt=receipt,
+            run=run,  # type: ignore[arg-type]
+            environment={"FAKE_MODE": "success"},
+            cwd=tmp_path,
+            port=_port(),
+            capability_timeout=3.0,
+            readiness_timeout=3.0,
+            request_timeout=3.0,
+            shutdown_timeout=0.3,
+            nonce_factory=lambda: next(nonces),
+        )
+    assert f"adapters/llama-server/{CASE.id}/sample.json" not in run.files

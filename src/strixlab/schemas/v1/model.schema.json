@@ -1,0 +1,542 @@
+{
+  "$defs": {
+    "MetadataPredicateV1": {
+      "additionalProperties": false,
+      "description": "One strict, machine-checkable GGUF metadata predicate.\n\nExactly one of ``scalar_value`` (type-strict exact equality against the inspector's\nscalar) or ``array_types`` (an exact match of the inspector's complete nested\nelement-type tuple, never array contents) is declared. No coercion, substring, or\nnumeric tolerance ever applies.",
+      "properties": {
+        "array_types": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "UINT8",
+                  "INT8",
+                  "UINT16",
+                  "INT16",
+                  "UINT32",
+                  "INT32",
+                  "FLOAT32",
+                  "BOOL",
+                  "STRING",
+                  "ARRAY",
+                  "UINT64",
+                  "INT64",
+                  "FLOAT64"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Array Types"
+        },
+        "key": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Key",
+          "type": "string"
+        },
+        "scalar_value": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scalar Value"
+        },
+        "value_type": {
+          "enum": [
+            "UINT8",
+            "INT8",
+            "UINT16",
+            "INT16",
+            "UINT32",
+            "INT32",
+            "FLOAT32",
+            "BOOL",
+            "STRING",
+            "ARRAY",
+            "UINT64",
+            "INT64",
+            "FLOAT64"
+          ],
+          "title": "Value Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value_type"
+      ],
+      "title": "MetadataPredicateV1",
+      "type": "object"
+    },
+    "ModelArchitectureV1": {
+      "additionalProperties": false,
+      "properties": {
+        "family": {
+          "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Family",
+          "type": "string"
+        },
+        "full_attention": {
+          "title": "Full Attention",
+          "type": "boolean"
+        },
+        "gated_deltanet": {
+          "title": "Gated Deltanet",
+          "type": "boolean"
+        },
+        "moe": {
+          "title": "Moe",
+          "type": "boolean"
+        },
+        "mtp": {
+          "title": "Mtp",
+          "type": "boolean"
+        },
+        "qsa": {
+          "title": "Qsa",
+          "type": "boolean"
+        },
+        "vision": {
+          "title": "Vision",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "family",
+        "moe",
+        "gated_deltanet",
+        "full_attention",
+        "qsa",
+        "mtp",
+        "vision"
+      ],
+      "title": "ModelArchitectureV1",
+      "type": "object"
+    },
+    "ModelArtifactV1": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/ModelFileIdentityV1"
+        },
+        "format": {
+          "const": "gguf",
+          "title": "Format",
+          "type": "string"
+        },
+        "metadata_predicates": {
+          "items": {
+            "$ref": "#/$defs/MetadataPredicateV1"
+          },
+          "title": "Metadata Predicates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "format",
+        "file"
+      ],
+      "title": "ModelArtifactV1",
+      "type": "object"
+    },
+    "ModelBaseV1": {
+      "additionalProperties": false,
+      "properties": {
+        "license": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "License",
+          "type": "string"
+        },
+        "repository": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])",
+          "title": "Repository",
+          "type": "string"
+        },
+        "revision": {
+          "pattern": "^[0-9a-f]{40}(?![\\s\\S])",
+          "title": "Revision",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "revision",
+        "license"
+      ],
+      "title": "ModelBaseV1",
+      "type": "object"
+    },
+    "ModelExecutionV1": {
+      "additionalProperties": false,
+      "properties": {
+        "required_features": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+            "type": "string"
+          },
+          "title": "Required Features",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_sources": {
+          "items": {
+            "minLength": 1,
+            "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+            "type": "string"
+          },
+          "title": "Required Sources",
+          "type": "array",
+          "uniqueItems": true
+        },
+        "verification_status": {
+          "const": "unverified",
+          "title": "Verification Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verification_status"
+      ],
+      "title": "ModelExecutionV1",
+      "type": "object"
+    },
+    "ModelFileIdentityV1": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Filename"
+        },
+        "local_path": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": "^(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)/[\\s\\S]*(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Local Path"
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repository"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{40}(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Revision"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sha256"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Size Bytes"
+        }
+      },
+      "title": "ModelFileIdentityV1",
+      "type": "object"
+    },
+    "ModelQuantizationV1": {
+      "additionalProperties": false,
+      "properties": {
+        "calibration_hash": {
+          "anyOf": [
+            {
+              "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+              "type": "string"
+            },
+            {
+              "const": "unknown",
+              "type": "string"
+            }
+          ],
+          "title": "Calibration Hash"
+        },
+        "calibration_method": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Calibration Method",
+          "type": "string"
+        },
+        "calibration_source": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Calibration Source",
+          "type": "string"
+        },
+        "format_family": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Format Family",
+          "type": "string"
+        },
+        "measured_bits_per_weight": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measured Bits Per Weight"
+        },
+        "storage_format": {
+          "const": "gguf",
+          "title": "Storage Format",
+          "type": "string"
+        },
+        "tensor_policy_id": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Tensor Policy Id",
+          "type": "string"
+        },
+        "tensor_policy_source": {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "title": "Tensor Policy Source",
+          "type": "string"
+        }
+      },
+      "required": [
+        "format_family",
+        "storage_format",
+        "tensor_policy_id",
+        "tensor_policy_source",
+        "calibration_method",
+        "calibration_source",
+        "calibration_hash"
+      ],
+      "title": "ModelQuantizationV1",
+      "type": "object"
+    },
+    "ModelSidecarV1": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "$ref": "#/$defs/ModelFileIdentityV1"
+        },
+        "format": {
+          "enum": [
+            "gguf",
+            "opaque"
+          ],
+          "title": "Format",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Id",
+          "type": "string"
+        },
+        "inspection": {
+          "enum": [
+            "gguf",
+            "hash-only"
+          ],
+          "title": "Inspection",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "mmproj",
+            "imatrix",
+            "opaque"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "metadata_predicates": {
+          "items": {
+            "$ref": "#/$defs/MetadataPredicateV1"
+          },
+          "title": "Metadata Predicates",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "format",
+        "file",
+        "inspection"
+      ],
+      "title": "ModelSidecarV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:strixlab:schema:model:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "architecture": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelArchitectureV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "artifact": {
+      "$ref": "#/$defs/ModelArtifactV1"
+    },
+    "base_model": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ModelBaseV1"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "draft_reason": {
+      "anyOf": [
+        {
+          "minLength": 1,
+          "pattern": "^(?!\\s)(?![\\s\\S]*\\s$)(?![\\s\\S]*\\u0000)[\\s\\S]+(?![\\s\\S])",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Draft Reason"
+    },
+    "execution": {
+      "$ref": "#/$defs/ModelExecutionV1"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "quality_reference": {
+      "anyOf": [
+        {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Quality Reference"
+    },
+    "quantization": {
+      "$ref": "#/$defs/ModelQuantizationV1"
+    },
+    "registry_status": {
+      "enum": [
+        "registered",
+        "draft"
+      ],
+      "title": "Registry Status",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sidecars": {
+      "items": {
+        "$ref": "#/$defs/ModelSidecarV1"
+      },
+      "title": "Sidecars",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "registry_status",
+    "artifact",
+    "quantization",
+    "execution"
+  ],
+  "title": "ModelManifestV1",
+  "type": "object"
+}

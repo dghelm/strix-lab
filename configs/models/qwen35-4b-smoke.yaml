@@ -1,0 +1,39 @@
+schema_version: 1
+id: qwen35-4b-smoke
+registry_status: registered
+base_model:
+  repository: Qwen/Qwen3.5-4B
+  revision: 851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
+  license: Apache-2.0
+architecture:
+  family: qwen3_5
+  moe: false
+  gated_deltanet: true
+  full_attention: true
+  qsa: false
+  mtp: true
+  vision: true
+artifact:
+  format: gguf
+  file:
+    repository: bartowski/Qwen_Qwen3.5-4B-GGUF
+    revision: 4168f45a16a1290d65a4ec0fa312ae917a4c15d6
+    filename: Qwen_Qwen3.5-4B-Q4_K_M.gguf
+    local_path: ${MODELS}/qwen35-4b/Qwen_Qwen3.5-4B-Q4_K_M.gguf
+    size_bytes: 3013027808
+    sha256: 13c16f426047e2de38cd075bdade4a7bcbc8c774384876f677740cda65f8a983
+  metadata_predicates:
+    - key: general.architecture
+      value_type: STRING
+      scalar_value: qwen35
+sidecars: []
+quantization:
+  format_family: Q4_K
+  storage_format: gguf
+  tensor_policy_id: unknown
+  tensor_policy_source: unknown
+  calibration_method: unknown
+  calibration_source: unknown
+  calibration_hash: unknown
+execution:
+  verification_status: unverified

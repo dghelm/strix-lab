@@ -1,8 +1,86 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
+from _model_fixtures import build_verified_receipt
+
+from strixlab import models
+
+
+@pytest.fixture
+def verified_receipt() -> Callable[..., models.ModelReceiptV1]:
+    return build_verified_receipt
+
+
+@pytest.fixture
+def model_value() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "id": "qwen35-2b-smoke",
+        "registry_status": "registered",
+        "base_model": {
+            "repository": "Qwen/Qwen3.5-2B",
+            "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+            "license": "Apache-2.0",
+        },
+        "architecture": {
+            "family": "qwen3_5",
+            "moe": False,
+            "gated_deltanet": True,
+            "full_attention": True,
+            "qsa": False,
+            "mtp": True,
+            "vision": True,
+        },
+        "artifact": {
+            "format": "gguf",
+            "file": {
+                "repository": "bartowski/Qwen_Qwen3.5-2B-GGUF",
+                "revision": "7d26695454df6de5fbcce2e58681e62dae06ce43",
+                "filename": "Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+                "local_path": "${MODELS}/qwen35-2b/Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+                "size_bytes": 1396198496,
+                "sha256": "57a1085840f497d764a7fc5d346922dbde961efb54cc792ea81d694fd846a1d8",
+            },
+            "metadata_predicates": [
+                {"key": "general.architecture", "value_type": "STRING", "scalar_value": "qwen35"}
+            ],
+        },
+        "sidecars": [],
+        "quantization": {
+            "format_family": "Q4_K",
+            "storage_format": "gguf",
+            "tensor_policy_id": "unknown",
+            "tensor_policy_source": "unknown",
+            "calibration_method": "unknown",
+            "calibration_source": "unknown",
+            "calibration_hash": "unknown",
+        },
+        "execution": {"verification_status": "unverified"},
+    }
+
+
+@pytest.fixture
+def draft_model_value() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "id": "qwen38-27b",
+        "registry_status": "draft",
+        "artifact": {"format": "gguf", "file": {}},
+        "quantization": {
+            "format_family": "unknown",
+            "storage_format": "gguf",
+            "tensor_policy_id": "unknown",
+            "tensor_policy_source": "unknown",
+            "calibration_method": "unknown",
+            "calibration_source": "unknown",
+            "calibration_hash": "unknown",
+        },
+        "execution": {"verification_status": "unverified"},
+        "draft_reason": "no reviewed conversion repository/revision or recipe is pinned yet",
+    }
 
 
 @pytest.fixture

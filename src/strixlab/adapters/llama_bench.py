@@ -16,9 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
-import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,13 +24,21 @@ from typing import Annotated, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
-from strixlab.adapters._executable_identity import (
+from strixlab.evidence import RunSession
+from strixlab.executable_identity import (
     ExecutableIdentity,
     hash_executable,
     require_stable_executable,
 )
-from strixlab.evidence import RunSession
 from strixlab.manifests import AbsolutePathString, DashId
+from strixlab.models import (
+    ModelError,
+    ModelLease,
+    ModelReceiptEvidenceV1,
+    ModelReceiptV1,
+    lease_verified_model,
+    require_receipt_inputs_match,
+)
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
 from strixlab.serialization import canonical_json_bytes
 
@@ -154,11 +160,13 @@ class LlamaBenchCaseV1(_Model):
 
 
 class LlamaBenchInputsV1(_Model):
-    """Binary and model provenance bound to one benchmark case.
+    """Binary and verified-model provenance bound to one benchmark case.
 
-    The model digest is explicitly ``asserted`` by the trusted caller, not verified
-    here; MODEL-001 will replace it with a verified receipt without changing the
-    benchmark/parser contract.
+    The model digest is ``verified`` against a MODEL-001 :class:`ModelReceiptV1`: the
+    embedded portable :class:`ModelReceiptEvidenceV1` projection independently
+    substantiates that verification (its canonical digest equals
+    ``model_receipt_sha256``) after the local registry disappears. ``model_path`` retains
+    the public path; the runner drives every child through the receipt-bound descriptor.
     """
 
     schema_version: Literal[1] = 1
@@ -171,7 +179,9 @@ class LlamaBenchInputsV1(_Model):
     model_id: DashId
     model_path: AbsolutePathString
     model_sha256: Sha256Hex
-    model_digest_status: Literal["asserted"] = "asserted"
+    model_digest_status: Literal["verified"] = "verified"
+    model_receipt_sha256: Sha256Hex
+    model_receipt_evidence: ModelReceiptEvidenceV1
 
 
 class LlamaBenchRequiredFlagsV1(_Model):
@@ -455,48 +465,16 @@ _BinaryIdentity = ExecutableIdentity
 _BINARY_SUBJECT = "benchmark binary"
 
 
-@dataclass(frozen=True, slots=True)
-class _ModelIdentity:
-    dev: int
-    ino: int
-    size: int
-    mtime_ns: int
-    ctime_ns: int
-
-
 def _hash_binary(path: Path) -> _BinaryIdentity:
     """Stream-hash a non-symlink regular executable with pre/post metadata stability."""
 
     return hash_executable(path, error=LlamaBenchIntegrityError, subject=_BINARY_SUBJECT)
 
 
-def _model_identity(path: Path) -> _ModelIdentity:
-    """Record a stable regular model file's identity without hashing it."""
-
-    try:
-        metadata = os.lstat(path)
-    except OSError as exc:
-        raise LlamaBenchIntegrityError(f"model file is unavailable: {path}") from exc
-    if not stat.S_ISREG(metadata.st_mode):
-        raise LlamaBenchIntegrityError(f"model path is not a regular file: {path}")
-    return _ModelIdentity(
-        dev=metadata.st_dev,
-        ino=metadata.st_ino,
-        size=metadata.st_size,
-        mtime_ns=metadata.st_mtime_ns,
-        ctime_ns=metadata.st_ctime_ns,
-    )
-
-
 def _require_stable_binary(path: Path, expected: _BinaryIdentity) -> _BinaryIdentity:
     return require_stable_executable(
         path, expected, error=LlamaBenchIntegrityError, subject=_BINARY_SUBJECT
     )
-
-
-def _require_stable_model(path: Path, expected: _ModelIdentity) -> None:
-    if _model_identity(path) != expected:
-        raise LlamaBenchIntegrityError(f"model file drifted across the run window: {path}")
 
 
 # --- Process projection and stream exactness ---------------------------------
@@ -625,14 +603,11 @@ class _CaseEvidence:
         self.json(f"{prefix}{sep}process.json", process.projection.model_dump(mode="json"))
 
 
-def _recheck(
-    binary_path: Path,
-    binary: _BinaryIdentity,
-    model_path: Path,
-    model: _ModelIdentity,
-) -> None:
+def _recheck(binary_path: Path, binary: _BinaryIdentity, lease: ModelLease) -> None:
+    # A lease.verify() drift raises ModelError, translated to the adapter integrity error
+    # by run_llama_bench_case's outer boundary.
     _require_stable_binary(binary_path, binary)
-    _require_stable_model(model_path, model)
+    lease.verify()
 
 
 def _run_child(
@@ -645,6 +620,7 @@ def _run_child(
     evidence: _CaseEvidence,
     prefix: str,
     sep: str,
+    descriptor: int,
 ) -> _ProjectedProcess:
     result = runner(
         argv,
@@ -653,6 +629,7 @@ def _run_child(
         inherit_env=False,
         base_env=environment,
         output_limit_bytes=STREAM_LIMIT_BYTES,
+        pass_fds=(descriptor,),
     )
     projected = _project(result)
     evidence.streams(prefix, projected, sep=sep)
@@ -732,6 +709,7 @@ def run_llama_bench_case(
     *,
     case: LlamaBenchCaseV1,
     inputs: LlamaBenchInputsV1,
+    receipt: ModelReceiptV1,
     run: RunSession,
     environment: Mapping[str, str],
     cwd: Path,
@@ -741,24 +719,73 @@ def run_llama_bench_case(
 ) -> LlamaBenchSampleV1:
     """Execute one benchmark case and return its terminal versioned sample.
 
-    Capability discovery, both probes, and (on capability success) one benchmark
-    child run against a ``environment`` snapshot with ``inherit_env=False`` and an
-    explicit ``cwd``. Every child outcome yields a structured sample. The caller owns
-    ``run``: this adapter never finalizes it. Evidence-boundary refusals and integrity
-    drift propagate as exceptions rather than being captured into a sample.
+    The verified ``receipt`` is bound to ``inputs`` and held across every child through
+    :func:`lease_verified_model`, so each ``llama-bench`` child opens the receipt-bound
+    inode via ``/proc/self/fd/<fd>`` even if the public pathname is swapped mid-run. Both
+    probes and (on capability success) one benchmark child run against a ``environment``
+    snapshot with ``inherit_env=False`` and an explicit ``cwd``. Every child outcome
+    yields a structured sample. The caller owns ``run``: this adapter never finalizes it.
+    Evidence-boundary refusals and integrity drift propagate as exceptions rather than
+    being captured into a sample.
     """
 
     binary_path = Path(inputs.binary_path)
-    model_path = Path(inputs.model_path)
     base = f"{EVIDENCE_ROOT}/{case.id}"
     evidence = _CaseEvidence(run=run, base=base, written=[])
+
+    try:
+        require_receipt_inputs_match(
+            receipt,
+            model_id=inputs.model_id,
+            model_path=inputs.model_path,
+            model_sha256=inputs.model_sha256,
+            model_receipt_sha256=inputs.model_receipt_sha256,
+            model_receipt_evidence=inputs.model_receipt_evidence,
+        )
+    except ModelError as exc:
+        raise LlamaBenchIntegrityError(str(exc)) from exc
 
     identity = _hash_binary(binary_path)
     if identity.sha256 != inputs.binary_sha256:
         raise LlamaBenchIntegrityError("benchmark binary SHA-256 does not match the input binding")
-    model = _model_identity(model_path)
 
-    # Probe 1: required --help. The initial hash/model snapshot is its integrity check.
+    try:
+        with lease_verified_model(receipt) as lease:
+            return _run_leased_case(
+                case=case,
+                inputs=inputs,
+                lease=lease,
+                binary_path=binary_path,
+                identity=identity,
+                evidence=evidence,
+                environment=environment,
+                cwd=cwd,
+                capability_timeout=capability_timeout,
+                benchmark_timeout=benchmark_timeout,
+                runner=runner,
+            )
+    except ModelError as exc:
+        raise LlamaBenchIntegrityError(str(exc)) from exc
+
+
+def _run_leased_case(
+    *,
+    case: LlamaBenchCaseV1,
+    inputs: LlamaBenchInputsV1,
+    lease: ModelLease,
+    binary_path: Path,
+    identity: _BinaryIdentity,
+    evidence: _CaseEvidence,
+    environment: Mapping[str, str],
+    cwd: Path,
+    capability_timeout: float,
+    benchmark_timeout: float,
+    runner: ProcessRunner,
+) -> LlamaBenchSampleV1:
+    model_operand = lease.descriptor_path
+    descriptor = lease.descriptor
+
+    # Probe 1: required --help. The initial hash and lease snapshot are its integrity check.
     help_process = _run_child(
         runner=runner,
         argv=(str(binary_path), "--help"),
@@ -768,11 +795,12 @@ def run_llama_bench_case(
         evidence=evidence,
         prefix="capabilities/help",
         sep=".",
+        descriptor=descriptor,
     )
 
     # Probe 2: advisory --version. Always attempted so its evidence is complete,
     # unless an intervening integrity failure aborts before the child.
-    _recheck(binary_path, identity, model_path, model)
+    _recheck(binary_path, identity, lease)
     version_process = _run_child(
         runner=runner,
         argv=(str(binary_path), "--version"),
@@ -782,6 +810,7 @@ def run_llama_bench_case(
         evidence=evidence,
         prefix="capabilities/version",
         sep=".",
+        descriptor=descriptor,
     )
 
     reason, capabilities = _evaluate_capability(
@@ -803,9 +832,10 @@ def run_llama_bench_case(
 
     if capabilities is None:
         assert reason is not None
-        _recheck(binary_path, identity, model_path, model)
+        _recheck(binary_path, identity, lease)
         return _finalize_sample(
             evidence,
+            lease=lease,
             status="capability-failed",
             reason=reason,
             case=case,
@@ -815,9 +845,9 @@ def run_llama_bench_case(
             measurement=None,
         )
 
-    # Benchmark child.
-    argv = build_benchmark_argv(binary_path=str(binary_path), model_path=str(model_path), case=case)
-    _recheck(binary_path, identity, model_path, model)
+    # Benchmark child. The model operand is the receipt-bound descriptor, not the path.
+    argv = build_benchmark_argv(binary_path=str(binary_path), model_path=model_operand, case=case)
+    _recheck(binary_path, identity, lease)
     benchmark_process = _run_child(
         runner=runner,
         argv=argv,
@@ -827,11 +857,12 @@ def run_llama_bench_case(
         evidence=evidence,
         prefix="invocations/0001",
         sep="/",
+        descriptor=descriptor,
     )
 
-    # Re-hash the binary and re-check the model after the final child. Drift leaves
+    # Re-hash the binary and re-verify the lease after the final child. Drift leaves
     # no sample.json because the claimed binding can no longer be attested.
-    _recheck(binary_path, identity, model_path, model)
+    _recheck(binary_path, identity, lease)
 
     invocation = LlamaBenchInvocationV1(ordinal=1, argv=argv, process=benchmark_process.projection)
 
@@ -840,6 +871,7 @@ def run_llama_bench_case(
         status, reason = failure
         return _finalize_sample(
             evidence,
+            lease=lease,
             status=status,
             reason=reason,
             case=case,
@@ -851,11 +883,12 @@ def run_llama_bench_case(
 
     try:
         measurement = parse_jsonl_sample(
-            benchmark_process.stdout_text or "", case=case, model_path=str(model_path)
+            benchmark_process.stdout_text or "", case=case, model_path=model_operand
         )
     except LlamaBenchParseError:
         return _finalize_sample(
             evidence,
+            lease=lease,
             status="parse-failed",
             reason="parse-failed",
             case=case,
@@ -867,6 +900,7 @@ def run_llama_bench_case(
 
     return _finalize_sample(
         evidence,
+        lease=lease,
         status="success",
         reason="success",
         case=case,
@@ -880,6 +914,7 @@ def run_llama_bench_case(
 def _finalize_sample(
     evidence: _CaseEvidence,
     *,
+    lease: ModelLease,
     status: SampleStatus,
     reason: Reason,
     case: LlamaBenchCaseV1,
@@ -888,7 +923,12 @@ def _finalize_sample(
     invocation: LlamaBenchInvocationV1 | None,
     measurement: LlamaBenchMeasurementV1 | None,
 ) -> LlamaBenchSampleV1:
-    """Build the sample from already-written evidence and publish ``sample.json`` last."""
+    """Build the sample and publish ``sample.json`` last, gated by a final lease check.
+
+    ``lease.verify()`` runs immediately before the terminal write, so finalizer-time model
+    drift raises the integrity error (via the runner's outer boundary) before any
+    ``sample.json`` exists.
+    """
 
     sample = LlamaBenchSampleV1(
         status=status,
@@ -901,5 +941,6 @@ def _finalize_sample(
         measurement=measurement,
         artifacts=tuple(sorted(evidence.written)),
     )
+    lease.verify()
     evidence.json("sample.json", sample.model_dump(mode="json"))
     return sample

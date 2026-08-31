@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -159,3 +160,27 @@ def test_build_schema_rejects_trailing_line_terminators(
 ) -> None:
     mutate(build_value)
     _assert_runtime_and_schema_reject("build", build_value)
+
+
+def _resolved_model(value: dict[str, Any]) -> dict[str, Any]:
+    resolved = deepcopy(value)
+    resolved["artifact"]["file"]["local_path"] = "/data/models/qwen35-2b/model.gguf"
+    return resolved
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["artifact"]["file"].update(sha256="zz"),
+        lambda value: value["artifact"]["file"].update(filename="bad\x00name"),
+        lambda value: value["artifact"]["file"].update(repository="not a repository"),
+        lambda value: value.update(id="model\n"),
+        lambda value: value["artifact"]["file"].update(revision="0123"),
+    ],
+)
+def test_model_schema_matches_runtime_string_constraints(
+    mutate: Any, model_value: dict[str, Any]
+) -> None:
+    value = _resolved_model(model_value)
+    mutate(value)
+    _assert_runtime_and_schema_reject("model", value)

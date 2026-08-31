@@ -652,6 +652,137 @@ correctness claim. Synthetic executables exercise orchestration; every fixture d
 locked by tests, and no GPU, model, network, external checkout, or live ca94157 binary is
 required.
 
+## Verified model registry v1
+
+The model registry is the first trust boundary above the runner adapters. It has three
+explicit trust states and never fetches weights, keeps model bytes in memory beyond a
+bounded hash, or copies model artifacts into StrixLab's home.
+
+1. **unregistered** — a local GGUF was safely inspected but no registered manifest
+   claims it (`ModelObservationV1`). This is practice evidence only and can never become
+   a verified receipt.
+2. **registered** — a `model` manifest pins upstream/local identity, exact size and
+   SHA-256, and compatibility predicates. Local presence is not implied; a registered
+   manifest may be checked in while its file is absent.
+3. **verified** — the local primary artifact and every required sidecar matched the
+   registered manifest and the stable-file checks, and the pinned inspector output
+   passed (`ModelReceiptV1`).
+
+`publishable` is a separate derived receipt property. Byte verification alone does not
+turn an unknown quant recipe, an asserted opaque-sidecar relationship, or unknown
+calibration into publishable quant-policy provenance: a receipt is `publishable` only
+when compatibility is `verified`, every quant-policy provenance field is known, and a
+measured bits-per-weight is present.
+
+### Model manifest v1
+
+The `model` kind reuses the manifest registry, alias grammar, `${...}` environment
+resolution, sensitive-name rejection, and raw pre-resolution model exactly as `build`
+does, so `${MODELS}` is validated before resolution and the resolved manifest is
+validated again. `ModelManifestV1` is strict, finite, extra-forbid, and models two
+variants selected by `registry_status`. A **registered** manifest requires base
+repository/revision/license, an architecture, and artifact repository/revision/filename/
+local-path/size/SHA-256, and forbids a draft reason. A **draft** requires a bounded
+`draft_reason` and forbids local identity, receipt predicates, and sidecars; absent
+identity stays absent rather than a placeholder. The literal `unknown` is legal only for
+bounded quantization provenance fields. Sidecar ids and local paths are unique and never
+alias the primary artifact. Metadata predicates use one strict shape: a bounded key, a
+GGUF value type from the inspector's closed vocabulary, and exactly one of a
+type-strict scalar value (no coercion, bool-as-int, or non-finite float) or a nonempty
+nested array-type tuple compared by element type only.
+
+### Source-compatible GGUF inspector
+
+Inspection binds the pinned `gguf-py/gguf/scripts/gguf_dump.py … --json` tool to an
+already-authenticated Git candidate rather than inventing another source-tree hash. The
+caller holds a `sources.lease_source(...)` lease for the clean, unpatched
+`strix-llama.cpp@ca94157f70a2776e8da6b6849b50b45a083d0478` preparation and supplies a
+`GgufInspectorBindingV1` recording that lease's preparation/candidate/content-tree
+identities and the interpreter's resolved-realpath and SHA-256. The script is resolved
+only beneath the leased worktree at its exact relative path and SHA-256, the lease's base
+commit is required with no patches or dirty status, and `lease.verify()` runs before and
+after the child. The model is opened once no-follow, validated as an owned regular file,
+bound `fstat`-to-`lstat`, hashed, and retained through inspection; the child receives
+only `/proc/self/fd/<fd>` through a new `run_process(pass_fds=…)` parameter, a fixed
+module-level bootstrap validates its argv shape and inserts the verified `gguf-py` root
+before executing the verified script under `runpy`, and the environment is a small
+constructed set (`LANG`/`LC_ALL`/`TZ` plus private scratch `HOME`/`TMPDIR`) with
+`inherit_env=False`. Interpreter, lease, descriptor, and pathname bindings are rechecked
+after inspection.
+
+`run_process` gains separate optional hard total-byte ceilings for stdout and stderr:
+the complete chunk that crosses one is still counted and hashed, then the process group
+is terminated and the outcome is `CAPTURE_FAILED` with `capture_error`
+`stdout:hard-limit-exceeded` or `stderr:hard-limit-exceeded`, and any partial spool is
+aborted rather than published. For the inspector, stdout has a 64 MiB ceiling and stderr
+256 KiB. Inspector stdout is validated strictly as UTF-8 from the captured raw spool
+bytes, its exact byte count and SHA-256 are recorded, and its JSON is normalized into a
+portable projection that drops the input filename and positional index/offset fields but
+keeps endianness, each metadata key/type/scalar-or-array-type, and every tensor's
+name/shape/type. Duplicate JSON keys, non-finite numbers, absolute-path strings, and
+output beyond the bound are rejected. Spawn, timeout, nonzero-exit, limit, UTF-8, JSON,
+and shape defects are typed verification failures, never partial receipts.
+
+### Stable file identity, cache, and receipts
+
+The model-file identity primitive (no-follow regular-file opens/lstats comparing device,
+inode, size, and modify/change times across every boundary) is shared, not copied per
+adapter. Full-file SHA-256 work is cached under `<home>/cache/model-hashes/v1/`, keyed by
+a canonical digest of absolute path plus the complete stable identity; a hit is honored
+only after a fresh no-follow stat matches every identity field, and a cold miss acquires
+a per-key advisory lock with a bounded wait (`wait_for_exclusive_lock`, default 300 s;
+expiry raises `ModelCacheBusyError` without hashing), rechecks, hashes once, and publishes
+a crash-safe record. Concurrent cold verifiers therefore serialize to one hash; a
+malformed, unsafe, or divergent entry is a typed cache-integrity failure. The cache is an
+optimization only: manifest size/SHA mismatch always fails and identity is rechecked after
+the inspector.
+
+The complete normalized metadata projection is a content-addressed local registry
+artifact under `<home>/models/metadata/v1/<sha256>.json`; the receipt records its digest
+and relative path. Local receipt envelopes are canonical JSON under
+`<home>/models/receipts/v1/<manifest-id>/<local-receipt-sha256>.json` with private,
+crash-safe, no-replace publication; identical content is reusable and divergent content
+at one address is an integrity failure. Digest domains are explicit canonical-JSON
+objects (`strixlab.model-hash-cache-key.v1`, `strixlab.gguf-metadata.v1`,
+`strixlab.model-receipt-evidence.v1`, `strixlab.model-receipt.v1`, and the manifest digest
+over `strixlab.model-manifest.v1` plus the resolved, validated manifest dump); no model
+carries its own digest, and loads reject a filename/content-digest mismatch. Neither local
+registry file is portable evidence by itself and neither contains model bytes.
+`ModelLease` is separately a process-local, non-serializable handle owning the descriptor,
+its `/proc/self/fd` path, and verification callbacks.
+
+Artifact compatibility requires the primary GGUF architecture metadata to match the
+closed v1 family map (`qwen3_5` requires the exact `general.architecture` STRING `qwen35`;
+an unmapped family is a typed failure), nonzero tensors, every declared predicate, every
+required sidecar, and every GGUF sidecar's own predicates. A hash-only sidecar is
+byte-verified but sets compatibility to `asserted` and forces `publishable` false.
+Execution requirements are recorded as unverified for later build/model binding and do
+not contribute to compatibility or publishability here.
+
+The checked-in smoke manifests (`configs/models/qwen35-2b-smoke.yaml`,
+`qwen35-4b-smoke.yaml`) pin immutable public Qwen base and bartowski GGUF revisions,
+sizes, and SHA-256s reviewed against `tests/fixtures/models/smoke-provenance.json`; they
+reference `${MODELS}` paths and are never downloaded during build, test, or verification.
+Three decision models ship as explicit drafts with no fabricated local identity.
+
+### Adapter migration
+
+`LlamaBenchInputsV1` and `LlamaServerInputsV1` retain `model_id`, `model_path`, and
+`model_sha256`, change `model_digest_status` from `asserted` to `verified`, and add
+`model_receipt_sha256` plus an embedded compact `ModelReceiptEvidenceV1` projection whose
+canonical digest equals `model_receipt_sha256`, so exported sample evidence independently
+substantiates what `verified` means after the local registry disappears. Each runner
+receives the corresponding `ModelReceiptV1`, binds it to the inputs, and holds
+`lease_verified_model` across the complete child lifetime, passing the lease's
+`/proc/self/fd/<fd>` operand and inherited descriptor to every child so each opens the
+receipt-bound inode even if the pathname is swapped mid-run. Only the model-path operand
+changes; all flags, order, capability grammar, request JSON, parsing, status vocabulary,
+and evidence layout are unchanged, and the llama-bench parser compares the tool-reported
+filename against the effective descriptor operand. `ModelLease.verify()` gates every
+terminal `sample.json`; context-manager exit repeats it defensively. Adapters never rehash
+multi-gigabyte model bytes per sample. This is an intentional in-place V1 migration: the
+repository is pre-release and has no supported persisted adapter samples.
+
 ## Versioning and schemas
 
 Manifest dispatch is by external kind plus integer `schema_version`. Version 1 is

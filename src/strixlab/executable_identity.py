@@ -1,4 +1,4 @@
-"""Shared executable-identity primitive for verified-binary runner adapters.
+"""Shared executable-identity primitive for verified-binary callers.
 
 Extracted verbatim from ADAPTER-001's binary integrity check: it stream-hashes a
 non-symlink regular executable no-follow and asserts complete pre/post

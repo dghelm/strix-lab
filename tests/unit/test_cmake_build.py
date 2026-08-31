@@ -66,6 +66,7 @@ def _toolchain(tmp_path: Path, *, drift: bool = False) -> Path:
     cmake = f"""#!{sys.executable}
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import sys
@@ -79,7 +80,9 @@ if args and args[0] == "--build":
     targets = args[args.index("--target") + 1:args.index("--parallel")]
     output = root / "bin"
     output.mkdir(exist_ok=True)
-    executable = shutil.which("true")
+    # Locate a stub executable via the default system path: the build now runs with the
+    # constructed toolchain PATH (correctly delivered), which does not include coreutils.
+    executable = shutil.which("true", path=os.defpath) or shutil.which("true")
     assert executable is not None
     for target in targets:
         shutil.copy2(executable, output / target)

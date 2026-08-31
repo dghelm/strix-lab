@@ -848,7 +848,7 @@ def test_hash_binary_requires_metadata_stability(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed_field: str
 ) -> None:
     binary, _ = write_binary(tmp_path)
-    import strixlab.adapters._executable_identity as ident
+    import strixlab.executable_identity as ident
 
     real_fstat = ident.os.fstat
     calls = 0
