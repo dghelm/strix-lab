@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/halo-box/strix-lab"
-Issues = "https://github.com/halo-box/strix-lab/issues"
-Repository = "https://github.com/halo-box/strix-lab"
+Homepage = "https://github.com/dghelm/halo-lab"
+Issues = "https://github.com/dghelm/halo-lab/issues"
+Repository = "https://github.com/dghelm/halo-lab"
 
 [project.scripts]
 strixlab = "strixlab.cli:main"
