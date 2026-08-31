@@ -413,6 +413,100 @@ deduplicated blob must agree on its media type. Because publication and verifica
 descriptor-anchored and no-follow, a destination parent or declared member replaced by a
 symlink fails closed as unavailable rather than being followed.
 
+## llama-bench adapter v1
+
+The `llama-bench` adapter is the first runner adapter: a library boundary that executes a
+verified `llama-bench` binary for exactly one typed benchmark case, preserves bounded raw
+process evidence in an active `RunSession`, and returns one versioned sample whether the
+child succeeds, exits nonzero, times out, cannot spawn, truncates output, or produces
+unparseable output. It defines no suite, model registry, comparison statistics, correctness
+gate, or run command; later layers call it. It adds no generic runner framework, no
+`llama-server`/capsule/profiler support, and no JSON or Markdown execution profile.
+
+Its public surface is one typed case model, one executable/model provenance model, one
+capability model, one result/sample model, a pure command builder and pure parsers, and one
+orchestration entry point. All v1 models are strict, frozen, `extra="forbid"`,
+finite-number-checked Pydantic models reusing the repository `DashId` and canonical JSON
+serializer. A case carries exactly one nonzero token count from 0 through 1,048,576 — `pp`
+or `tg`, never both — with `repetitions` positive and capped at 32, and a `metric_kind`
+whose canonical value (`prompt-processing` or `text-generation`) must agree with that count.
+The inputs model binds a build ID, source commit, absolute binary path, verified binary
+SHA-256, model ID, absolute model path, and a caller-asserted model SHA-256 explicitly
+labelled `asserted`: MODEL-001 will replace it with a verified receipt without changing the
+benchmark or parser contract. The source commit is fixed to the ca94157 profile revision;
+another revision requires another explicit profile.
+
+Capability discovery is pinned to
+`strix-llama.cpp@ca94157f70a2776e8da6b6849b50b45a083d0478` and its checked-in
+`tools/llama-bench/README.md`. Before discovery the binary is verified as a non-symlink
+regular executable and stream-hashed against its asserted digest with pre/post metadata
+stability; that identity is re-required before every child and re-hashed after the final
+child. The model is validated as a stable regular file before and after the window but not
+hashed here. A pre-child mismatch aborts before launching that child; a final binary-hash or
+model-metadata mismatch raises a typed integrity error and leaves no `sample.json`, because
+no truthful binding can then be claimed. Discovery runs `<binary> --help` and an advisory
+`<binary> --version` attempt through `run_process` — never a shell — with a caller-provided
+complete environment (`inherit_env=False`), an explicit working directory, and separate
+bounded capability and benchmark timeouts. Both probes are always attempted so their process
+evidence is complete, unless an intervening integrity failure aborts before the next child.
+No benchmark child runs unless both probes stay within bounds, the required help probe exits
+successfully, is valid UTF-8, and matches the supported grammar (`-m/--model`, `-p/--n-prompt`,
+`-n/--n-gen`, `-r/--repetitions`, and `-o/--output <csv|json|jsonl|md|sql>`, matched by exact
+token spellings), and the advisory version attempt matches ca94157's expected unsupported
+outcome — return code 1 plus stable `invalid parameter for argument` and `--version`
+markers, since that
+revision has no `--version` branch. ca94157-v1
+always selects JSONL because that exact grammar advertises it; a future revision lacking JSONL
+must introduce its own explicit capability/parser profile. Only an allowlisted argv is
+constructed — binary, model, prompt tokens, generated tokens, repetitions, and the discovered
+`-o jsonl` flag/value — never arbitrary extra arguments.
+
+Parsers are pure and independently tested. The JSONL parser accepts exactly one nonblank
+object line and rejects duplicate keys, non-finite values, trailing data, wrong types, missing
+fields, and extra result rows. It normalizes only the v1 execution fields — prompt/generated
+token counts, `avg_ts`, `stddev_ts`, and ordered `samples_ts` — and requires the row's
+`model_filename` to equal the invoked absolute model path, its token counts to match the
+one-metric case, `len(samples_ts) == repetitions`, every rate finite and positive, and the
+standard deviation finite and nonnegative. Raw output is preserved separately; a nominal exit
+code 0 is not success until parsing and case binding both succeed.
+
+Evidence is written with `RunSession.write_portable`, role `samples`, so the existing 16 MiB
+per-member, 64 MiB aggregate, path, media, and secret policies remain the single boundary.
+Deterministic logical paths live under `adapters/llama-bench/<case-id>/`:
+`capabilities/{help,version}.{stdout,stderr}.txt`, `capabilities/{help,version}.process.json`,
+`capabilities/attempt.json`, `invocations/<zero-padded-ordinal>/{stdout,stderr}.txt` and
+`process.json`, and `sample.json` written last. No full-output spools are used; each child
+runs under a 256 KiB in-memory limit per stream, and the three-child worst case retains at
+most six stream prefixes well beneath the aggregate budget. `run_process` always counts and
+hashes the complete drained stream but decodes the bounded prefix with replacement; a stream
+is exact and publishable only when it is not truncated and re-encoding its returned text
+reproduces both the recorded byte count and SHA-256. Only exact streams are published, as
+`text/plain`; truncated or non-UTF-8 streams have no text artifact, while `process.json` still
+preserves total byte counts, complete-stream digests, truncation, and a neutral failure
+category. Empty exact streams are recorded deterministically and never parsed.
+
+Failure precedence is fixed for both probes and the benchmark child:
+`capture-failed` > `spawn-failed` > `timed-out` > `output-oversized` > `encoding-failed` >
+`nonzero-exit` > `parse-failed` > `success`, classified across both output streams. Every
+secondary fact stays visible in the process projection, which carries only neutral categories
+and never raw exception prose. A capability failure runs no benchmark child and still writes a
+`sample.json` binding the probe evidence. Terminal sample status is one of `success`,
+`capability-failed`, `process-failed`, `output-truncated`, or `parse-failed`. The adapter
+returns a sample for child, capability, and parse failures; it never finalizes the
+caller-owned `RunSession`. Evidence-boundary exceptions (secret refusal, duplicate paths) and
+integrity drift propagate instead, leaving the session partially written for the owning caller
+to finalize as failure rather than retrying the same case in place.
+
+The supported grammar and JSONL protocol are pinned by golden fixtures under
+`tests/fixtures/llama_bench/ca94157/` with a provenance note. Help and version-attempt
+streams are captured from a local CPU build of the exact pinned commit. The upstream JSONL
+example is byte-for-byte from that revision's README and carries both a `pp` and a `tg` row,
+so it is a documentation-protocol fixture only and is not adapter-valid. The single-metric
+golden is documentation-derived — that README `pp` row rebound to an absolute model path —
+not a local model measurement, which requires a real gfx1151 build and model run. Synthetic
+executables exercise orchestration; parser conformance is pinned by the single-metric golden
+and upstream documentation fixture, and every fixture digest is locked by tests.
+
 ## Versioning and schemas
 
 Manifest dispatch is by external kind plus integer `schema_version`. Version 1 is
