@@ -1,0 +1,5 @@
+"backend_name","op_name","op_params","test_mode","supported","error_message","backend_reg_name"
+"CPU","ABS","type=f32,ne_a=[128,2,2,2],v=0","test","1","",""
+"CPU","ABS","type=f32,ne_a=[5,7,11,13],v=0","test","1","",""
+"CPU","ABS","type=f32,ne_a=[128,2,2,2],v=1","test","1","",""
+"CPU","ABS","type=f32,ne_a=[5,7,11,13],v=1","test","1","",""

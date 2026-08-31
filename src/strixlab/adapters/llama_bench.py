@@ -26,10 +26,14 @@ from typing import Annotated, Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
+from strixlab.adapters._executable_identity import (
+    ExecutableIdentity,
+    hash_executable,
+    require_stable_executable,
+)
 from strixlab.evidence import RunSession
 from strixlab.manifests import AbsolutePathString, DashId
 from strixlab.process import ProcessOutcome, ProcessResult, run_process
-from strixlab.secure_fs import readonly_open_flags
 from strixlab.serialization import canonical_json_bytes
 
 __all__ = [
@@ -61,7 +65,6 @@ EVIDENCE_ROOT = "adapters/llama-bench"
 STREAM_LIMIT_BYTES = 256 * 1024
 _MAX_TOKENS = 1_048_576
 _MAX_REPETITIONS = 32
-_READ_CHUNK_BYTES = 64 * 1024
 
 MetricKind = Literal["prompt-processing", "text-generation"]
 SampleStatus = Literal[
@@ -448,15 +451,8 @@ def parse_jsonl_sample(
 # --- Binary / model integrity -------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _BinaryIdentity:
-    dev: int
-    ino: int
-    size: int
-    mode: int
-    mtime_ns: int
-    ctime_ns: int
-    sha256: str
+_BinaryIdentity = ExecutableIdentity
+_BINARY_SUBJECT = "benchmark binary"
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,43 +467,7 @@ class _ModelIdentity:
 def _hash_binary(path: Path) -> _BinaryIdentity:
     """Stream-hash a non-symlink regular executable with pre/post metadata stability."""
 
-    try:
-        descriptor = os.open(path, readonly_open_flags())
-    except OSError as exc:
-        raise LlamaBenchIntegrityError(f"benchmark binary is unavailable: {path}") from exc
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        before = os.fstat(descriptor)
-        if not stat.S_ISREG(before.st_mode):
-            raise LlamaBenchIntegrityError(f"benchmark binary is not a regular file: {path}")
-        if not before.st_mode & 0o111:
-            raise LlamaBenchIntegrityError(f"benchmark binary is not executable: {path}")
-        while chunk := os.read(descriptor, _READ_CHUNK_BYTES):
-            digest.update(chunk)
-            size += len(chunk)
-        after = os.fstat(descriptor)
-        if (
-            before.st_dev != after.st_dev
-            or before.st_ino != after.st_ino
-            or before.st_size != after.st_size
-            or before.st_mode != after.st_mode
-            or before.st_mtime_ns != after.st_mtime_ns
-            or before.st_ctime_ns != after.st_ctime_ns
-            or size != before.st_size
-        ):
-            raise LlamaBenchIntegrityError(f"benchmark binary changed while hashing: {path}")
-    finally:
-        os.close(descriptor)
-    return _BinaryIdentity(
-        dev=before.st_dev,
-        ino=before.st_ino,
-        size=size,
-        mode=stat.S_IMODE(before.st_mode),
-        mtime_ns=before.st_mtime_ns,
-        ctime_ns=before.st_ctime_ns,
-        sha256=digest.hexdigest(),
-    )
+    return hash_executable(path, error=LlamaBenchIntegrityError, subject=_BINARY_SUBJECT)
 
 
 def _model_identity(path: Path) -> _ModelIdentity:
@@ -529,10 +489,9 @@ def _model_identity(path: Path) -> _ModelIdentity:
 
 
 def _require_stable_binary(path: Path, expected: _BinaryIdentity) -> _BinaryIdentity:
-    current = _hash_binary(path)
-    if current != expected:
-        raise LlamaBenchIntegrityError(f"benchmark binary drifted across the run window: {path}")
-    return current
+    return require_stable_executable(
+        path, expected, error=LlamaBenchIntegrityError, subject=_BINARY_SUBJECT
+    )
 
 
 def _require_stable_model(path: Path, expected: _ModelIdentity) -> None:

@@ -507,6 +507,120 @@ not a local model measurement, which requires a real gfx1151 build and model run
 executables exercise orchestration; parser conformance is pinned by the single-metric golden
 and upstream documentation fixture, and every fixture digest is locked by tests.
 
+## test-backend-ops adapter v1
+
+The `test-backend-ops` adapter is the correctness hard-gate runner adapter: a library
+boundary that executes a verified `test-backend-ops` binary for exactly one filtered
+operation set against one named backend, preserves bounded raw process evidence in an
+active `RunSession`, and returns one versioned sample whether the child passes the gate,
+fails it, exits nonzero, times out, cannot spawn, truncates output, or produces
+unparseable output. Its only policy decision is fail-closed correctness. It defines no
+suite manifest, operation-set policy, ranking, `perf`/`support`/`grad` mode,
+SQL/console parser, `test-file` ingestion, arbitrary-command adapter, or run command;
+later layers call it. It never acquires the GPU lock and never finalizes the
+caller-owned `RunSession`.
+
+This adapter consumes a **caller-provided verified binary**: the trusted caller supplies
+and attests the executable, and a build profile that produces it must configure
+`LLAMA_BUILD_TESTS=ON` (this milestone changes no build orchestration and adds no
+profile). Its public surface is one typed case model, one verified-binary provenance
+model, one capability model, one CSV row, one gate summary, one terminal sample model,
+a pure command builder, pure help/list/CSV parsers and a pure gate function, and one
+orchestration entry point. All v1 models are strict, frozen, `extra="forbid"`,
+finite-number-checked Pydantic models reusing the repository `DashId`,
+`AbsolutePathString`, and canonical JSON serializer. A case carries a one-to-64-character
+dash-form id, one to 32 unique uppercase operation names in manifest order, one
+non-empty `params_regex` bounded to 512 UTF-8 bytes with no C0/DEL controls (retained as
+one argv data item and never translated through Python's regex engine), one
+printable-ASCII backend selector of one to 128 characters compared exactly with the
+observed CSV `backend_name`, and the fixed `test`/`csv`/`1` mode, output, and worker
+values. The inputs model binds the fixed ca94157 source commit, a bounded build id, an
+absolute binary path, and a lowercase binary SHA-256.
+
+Executable identity reuses the ADAPTER-001 security primitive, extracted to a private
+adapter-local module (`adapters/_executable_identity.py`) that stream-hashes a
+non-symlink regular executable no-follow and asserts complete pre/post descriptor
+metadata stability. Each adapter passes its own integrity-exception factory, so the
+shared primitive preserves adapter-specific exception translation rather than imposing a
+common exception type; nothing else (command construction, capability policy, outcome
+classification, evidence layout, or sample finalization) is shared. The binary is hashed
+against its asserted digest before discovery, re-required before every child, and
+re-hashed after the terminal child; drift raises a typed integrity error and leaves no
+`sample.json` because no truthful binding can then be claimed. Repeated path-identity
+checks narrow but do not eliminate the small check-to-exec race, because the child is
+launched by path rather than descriptor.
+
+Capability discovery always attempts two bounded probes — `<binary> --help` then
+`<binary> --list-ops` — through `run_process`, never a shell, with a caller-provided
+complete environment (`inherit_env=False`), an explicit working directory, and a bounded
+capability timeout; each retains 256 KiB per stream and never spools. The ca94157 help
+probe is valid only when it exits **1**, its stdout is complete UTF-8, its stderr is
+complete and empty, and its normalized nonempty lines match the pinned usage and
+option-description grammar at whitespace-delimited token boundaries; only the single
+program-path token after `Usage:` is normalized, so suffix, substring, reordered-option,
+and weakened-choice lookalikes all fail, and free substring membership is never used. The
+list probe is valid only when it exits 0, both streams are complete UTF-8, stderr is
+empty, and the pure parser accepts the exact header/list/blank-line/total grammar with
+exactly 128 unique operations and `Total: 128 operations`; any drift is a capability
+failure rather than silent forward compatibility. Discovery also fails closed if any
+requested operation is absent from the parsed list. Across both probes, process defects
+are selected in the order capture, spawn, timeout, oversized, invalid UTF-8 (ties select
+help before list-ops) and yield the corresponding terminal process status; otherwise an
+exit/stream/grammar violation or an absent operation yields `capability-failed` with a
+bounded refining reason. No test child runs on a capability failure, which still returns
+a terminal sample after the final integrity check.
+
+Only an allowlisted argv is constructed —
+`<binary> test -o <comma-joined ops> -b <backend> -p <params_regex> --output csv -j 1` —
+driven entirely by the typed case, so injection-shaped `params_regex` or backend values
+remain single argv data items. The pure CSV parser uses the standard-library reader in
+strict mode over complete UTF-8 stdout, never modifies the process-global field-size
+limit, and translates every `csv.Error` (including the default field-limit failure) into
+a domain parse error. It preserves upstream row order and rejects a missing, reordered,
+duplicated, or extended header; malformed quoting, wrong column counts, blank records,
+embedded record newlines, trailing content, or decoded C0/DEL controls in any field (one
+ordinary terminal line ending is allowed); zero rows or more than 4096 rows; a non-`test`
+mode, an unrequested operation, an empty or mismatched backend, a non-pinned `supported`
+value, and duplicate full-identity rows. Structural parsing and the hard gate are
+separate pure functions: a case passes only when the child has no process defect and
+exits 0, parsing yields at least one row, every requested operation appears, every row is
+supported (`"1"`), every `error_message` is empty, and every row binds the requested
+backend and test mode. Unsupported, missing, or error-bearing rows are retained and
+produce a terminal hard-gate failure, not a parser exception. Exact parseable stdout is
+parsed even when the child exits nonzero and its rows are retained, but `child-failed`
+takes precedence over parse and gate status. A process defect on one stream never
+suppresses publication or parsing of independently exact output on the other.
+
+Evidence is written with `RunSession.write_portable`, role `correctness`, under
+`adapter/backend-ops/<case-id>/`: `capabilities/{help,list-ops}.{stdout.txt,stderr.txt}`
+and `.process.json`, `capabilities/attempt.json`, `invocations/0001/{stdout.csv,
+stderr.txt}` and `process.json`, and `sample.json` written last. A stream is exact and
+publishable only when it is not truncated and re-encoding its returned text reproduces
+both the recorded byte count and SHA-256; truncated or non-UTF-8 streams have no text
+artifact while `process.json` still preserves their complete byte counts, digests,
+truncation, and neutral category. Zero-byte exact streams are recorded only in
+`process.json`, so no empty text blob collides across the `text/plain` and `text/csv`
+media types. The terminal sample inventories every prior artifact with its relative path,
+size, media type, role, and SHA-256; `sample.json` is excluded from its own inventory and
+is authenticated by the enclosing run finalization/checksum contract. `sample.json` is
+written last so it never claims evidence that was not durably accepted first. Terminal
+status is one of `capability-failed`, `capture-failed`, `spawn-failed`, `timed-out`,
+`oversized-output`, `encoding-failed`, `child-failed`, `parse-failed`, `hard-gate-failed`,
+or `passed`; a bounded reason refines only a capability failure. Ordinary capability,
+process, parser, and hard-gate failures return structured terminal samples; only
+evidence-boundary refusals (secret refusal, duplicate paths) and binary-integrity drift
+propagate, leaving the session for the owning caller to finalize.
+
+The capability grammar, operation list, and CSV result parser are pinned by golden
+fixtures under `tests/fixtures/backend_ops/ca94157/` with a provenance note. Help,
+operation-list, and a filtered `ABS`/`type=f32` CSV run are captured from a local CPU
+build of the exact pinned commit; the single `Usage:` program-path token is normalized to
+a stable basename, matching what the capability parser observes. The CSV capture is a
+CPU reference result and a parser/provenance fixture only — not a gfx1151 or HIP
+correctness claim. Synthetic executables exercise orchestration; every fixture digest is
+locked by tests, and no GPU, model, network, external checkout, or live ca94157 binary is
+required.
+
 ## Versioning and schemas
 
 Manifest dispatch is by external kind plus integer `schema_version`. Version 1 is
