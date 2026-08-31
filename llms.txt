@@ -1,0 +1,75 @@
+# StrixLab — coding-agent guide
+
+StrixLab is pre-alpha, local, CLI-first research tooling for reproducible AMD
+Strix Halo optimization experiments. It orchestrates existing runtimes and
+isolated native builds and records immutable, verifiable run evidence. It is not
+an inference runtime, a leaderboard, a judge, or an upstream patch bot.
+
+## Before changing code
+
+- Read `README.md` and `CONTRIBUTING.md` first.
+- Use `uv`. There is no second task runner and no pre-commit framework.
+- Keep changes narrow, evidence-oriented, and independently testable.
+
+## Repository validation (no special hardware)
+
+Run this path to validate a clean checkout without any GPU:
+
+```bash
+uv sync --locked --all-groups
+uv run strixlab --help
+uv run pytest
+```
+
+Fuller developer checks:
+
+```bash
+uv lock --check
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy src
+uv run pytest --cov=strixlab --cov-report=term-missing --cov-fail-under=90
+uv build
+```
+
+## Provisioned smoke suite (real Strix Halo only)
+
+Requires an operator-provisioned build ID and a machine-local verified model
+receipt SHA-256; there is no self-service command that produces them yet.
+Replace every `<...>` placeholder before running — angle brackets are shell
+redirection syntax, so this block is illustrative, not directly pasteable:
+
+```bash
+uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
+  --machine configs/machines/strix-halo-128g.yaml \
+  --build <BUILD_ID> \
+  --model-receipt <MODEL_RECEIPT_SHA256>
+uv run strixlab run inspect <RUN_ID>
+uv run strixlab bundle export <RUN_ID> <NEW_BUNDLE_DIRECTORY>
+uv run strixlab bundle verify <NEW_BUNDLE_DIRECTORY>
+```
+
+## Field reports
+
+A field report is a small, privacy-safe observation copied from
+`field-reports/TEMPLATE.md` to `field-reports/YYYY-MM-DD-<short-slug>.md`. It
+records: report kind, StrixLab commit, date and reporter, a machine/OS/GPU
+summary without unique host identifiers, the exact commands run (with
+repository-relative paths kept but identifying values redacted), a
+pass/fail/inconclusive outcome, hardware-run identifiers and verified
+bundle-summary fields when available, redacted failure or friction notes, and an
+explicit confirmation that no weights, credentials, private data, raw home, or
+bundle are included. Failed and inconclusive results are valuable and must be
+reported honestly.
+
+## Never commit or upload
+
+Model weights, raw StrixLab homes, private data, credentials, or evidence
+bundles. Reports carry only small summaries, identifiers, digests, exact
+commands, and redacted excerpts.
+
+## Authorization boundaries
+
+Do not push, open a pull request, change any external repository, or claim a
+solution, score, or "win" without explicit human authorization. StrixLab reports
+are provisional observations, not judged submissions.
