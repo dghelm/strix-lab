@@ -25,6 +25,8 @@ A clean checkout provides a strict, evidence-oriented CLI:
 - **Schema / manifest validation** — versioned, packaged JSON Schemas.
 - **Isolated source preparation** — StrixLab-owned disposable Git worktrees.
 - **Reproducible builds** — pinned, inspectable native build trees.
+- **Self-service pilot inputs** — checked-in source/build profiles and local
+  model verification produce the IDs required by the smoke suite.
 - **Deterministic smoke suite** — correctness-first suite execution that
   finalizes an immutable run (`run suite`).
 - **Run inspection** — verify a finalized run's index, record, and checksums
@@ -35,8 +37,8 @@ A clean checkout provides a strict, evidence-oriented CLI:
 ### What does not exist yet
 
 - No web service, official judge, leaderboard, score, or "winning solution".
-- No model-registration CLI, and no shipped public source-lock or build-profile
-  examples that provision a build ID and model receipt end to end.
+- No model downloader; you must obtain the pinned GGUF yourself and keep it
+  outside the repository.
 - No upstream pull-request bot; StrixLab never pushes changes or opens PRs.
 
 Field reports (see below) are provisional observations, **not** judged
@@ -74,26 +76,56 @@ non-mutating to machine configuration, but it **does** write a versioned
 `doctor.json` report beneath the resolved StrixLab home. See
 [`docs/doctor.md`](docs/doctor.md) for the report and exit contracts.
 
-## Provisioned-pilot smoke suite
+## Self-service Strix Halo smoke suite
 
-Running the current smoke suite end to end requires an already-prepared build ID
-and a machine-local verified model receipt SHA-256. Both currently require a
-provisioned, operator-assisted setup — the repository does not yet ship a
-self-service path that produces them.
+The pilot path is now self-service for a Strix Halo owner with ROCm installed at
+`/opt/rocm`. It builds the pinned runtime locally and never downloads or copies
+model weights. Obtain the pinned `Qwen_Qwen3.5-4B-Q4_K_M.gguf` yourself, verify
+that it matches the size and SHA-256 in
+[`configs/models/qwen35-4b-smoke.yaml`](configs/models/qwen35-4b-smoke.yaml), and
+place it at:
 
-```bash
-uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
-  --machine configs/machines/strix-halo-128g.yaml \
-  --build <BUILD_ID> \
-  --model-receipt <MODEL_RECEIPT_SHA256>
-uv run strixlab run inspect <RUN_ID>
-uv run strixlab bundle export <RUN_ID> <NEW_BUNDLE_DIRECTORY>
-uv run strixlab bundle verify <NEW_BUNDLE_DIRECTORY>
+```text
+$MODELS/qwen35-4b/Qwen_Qwen3.5-4B-Q4_K_M.gguf
 ```
 
-Replace every `<...>` placeholder with a real value before running: angle
-brackets are shell redirection syntax, so the block above is illustrative and is
-not directly pasteable.
+Then run the following commands from the repository root. Source and build
+preparation print their IDs on the first line, model verification prints only
+the receipt digest, and the suite prints its ID after `run:`. Copy only the ID
+or digest—not a label—into the corresponding shell variable.
+
+```bash
+export MODELS=/absolute/path/to/your/model-root
+
+uv run strixlab doctor --machine configs/machines/strix-halo-128g.yaml
+
+uv run strixlab source prepare configs/sources/strix-llama.yaml
+PREPARATION_ID='prep-strix-llama-...'
+
+uv run strixlab build prepare "$PREPARATION_ID" \
+  configs/builds/hip-rocm-gfx1151.yaml
+BUILD_ID='build-sha256:...'
+
+uv run strixlab model verify configs/models/qwen35-4b-smoke.yaml \
+  --source "$PREPARATION_ID"
+MODEL_RECEIPT_SHA256='...'
+
+uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
+  --machine configs/machines/strix-halo-128g.yaml \
+  --build "$BUILD_ID" \
+  --model-receipt "$MODEL_RECEIPT_SHA256"
+RUN_ID='run-...'
+
+uv run strixlab run inspect "$RUN_ID"
+uv run strixlab bundle export "$RUN_ID" "../strixlab-bundle-$RUN_ID"
+uv run strixlab bundle verify "../strixlab-bundle-$RUN_ID"
+```
+
+The quoted `...` assignments are deliberate copy points, not literal values.
+Run the pilot from a credential-clean shell: StrixLab scans evidence and terminal
+output for values held in sensitive-named environment variables and fails closed
+rather than risk publishing one. Do not unset variables you do not understand;
+start a clean shell or remove only credentials you know are unnecessary.
 
 ## Local state and safety
 
@@ -116,7 +148,7 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
-- **Hardware field reports** — provisioned-pilot smoke-suite observations,
+- **Hardware field reports** — self-service smoke-suite observations,
   including failures and inconclusive runs.
 - **Docs and tests** — narrow clarifications and coverage.
 - **Narrow code contributions** — keep them small, evidence-oriented, and

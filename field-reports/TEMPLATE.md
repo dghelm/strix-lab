@@ -11,7 +11,7 @@ data, a raw StrixLab home, or an evidence bundle. Delete these comments.
 
 # Field report: <short title>
 
-- **Report kind:** repository validation | provisioned hardware smoke suite
+- **Report kind:** repository validation | self-service hardware smoke suite
 - **StrixLab commit:** <git rev-parse HEAD>
 - **Date:** YYYY-MM-DD
 - **Reporter:** <name or handle — optional>

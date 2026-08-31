@@ -33,7 +33,8 @@ canonical development interface.
 ## Field reports
 
 Field reports are small, privacy-safe observations — repository-validation or
-provisioned smoke-suite runs, including failures and inconclusive results. To
+self-service hardware smoke-suite runs, including failures and inconclusive
+results. To
 submit one, copy [`field-reports/TEMPLATE.md`](field-reports/TEMPLATE.md) to
 `field-reports/YYYY-MM-DD-<short-slug>.md`, fill it in, and open a pull request.
 
