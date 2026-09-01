@@ -944,6 +944,52 @@ class SuiteManifestV1(ManifestModel):
         return self
 
 
+# --- Capsule manifest v1 ------------------------------------------------------
+
+
+class _CapsuleManifestModel(ManifestModel):
+    """Strict and transitively frozen base for the capsule manifest tree."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True, allow_inf_nan=False)
+
+
+class CapsuleBuildRequirementV1(_CapsuleManifestModel):
+    """Authoritative build coordinates required from the caller's verified lease."""
+
+    source_id: DashId
+    source_commit: CommitSha
+    toolchain_mode: Literal["host", "rocm"]
+    gfx_target: SuiteGfxArch
+    target: BuildTarget
+
+
+class CapsuleContractV1(_CapsuleManifestModel):
+    """The fixed process protocol and immutable scenario identity."""
+
+    protocol: Literal["native-capsule-v1"]
+    scenario_sha256: Sha256Lower
+
+
+class CapsuleTimeoutsV1(_CapsuleManifestModel):
+    """Independent hard wall-clock bounds for the three protocol children."""
+
+    describe_seconds: SuiteTimeoutSeconds
+    correctness_seconds: SuiteTimeoutSeconds
+    benchmark_seconds: SuiteTimeoutSeconds
+
+
+class CapsuleManifestV1(_CapsuleManifestModel):
+    """Frozen library-only declaration for one native capsule candidate."""
+
+    schema_version: Literal[1]
+    id: DashId
+    candidate: DashId
+    machine: DashId
+    build: CapsuleBuildRequirementV1
+    contract: CapsuleContractV1
+    timeouts: CapsuleTimeoutsV1
+
+
 class UnknownManifestKind(ValueError):
     """Raised when no manifest kind is registered."""
 
@@ -984,6 +1030,7 @@ ManifestRegistry.register("machine", 1, MachineProfileV1)
 ManifestRegistry.register("build", 1, BuildProfileV1)
 ManifestRegistry.register("model", 1, ModelManifestV1)
 ManifestRegistry.register("suite", 1, SuiteManifestV1)
+ManifestRegistry.register("capsule", 1, CapsuleManifestV1)
 
 _RAW_MODELS: dict[str, type[ManifestModel]] = {
     "build": _RawBuildProfileV1,
