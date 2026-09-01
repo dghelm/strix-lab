@@ -83,9 +83,11 @@ _REQUIRED_HELP_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         re.compile(r"(?m)^-ngl,\s+--gpu-layers,\s+--n-gpu-layers\s+N\s+"),
     ),
 )
+# Reviewed patches make the Git-derived version dirty. Exact candidate contents
+# are bound by source/build evidence; this probe only recognizes the pinned CLI.
 _VERSION_RE = re.compile(
     r"^version: 0\.3\.0-dev "
-    r"\(build 0, commit ca94157f70a2776e8da6b6849b50b45a083d0478\)$"
+    r"\(build 0, commit ca94157f70a2776e8da6b6849b50b45a083d0478(?:-dirty)?\)$"
 )
 _SENTINEL_RE = re.compile(r"^[0-9a-f]{32}$")
 

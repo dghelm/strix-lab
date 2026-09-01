@@ -339,6 +339,30 @@ def test_pinned_capability_fixtures() -> None:
         )
 
 
+def test_version_capability_accepts_authenticated_patched_tree_suffix() -> None:
+    clean = (FIXTURES / "version.stderr.txt").read_text(encoding="utf-8")
+    dirty = clean.replace(
+        "ca94157f70a2776e8da6b6849b50b45a083d0478",
+        "ca94157f70a2776e8da6b6849b50b45a083d0478-dirty",
+        1,
+    )
+
+    assert parse_version_capability(dirty) == "built with GNU 16.2.1 for Linux x86_64"
+
+
+@pytest.mark.parametrize("suffix", ["-candidate", "-Dirty", "-dirty-extra"])
+def test_version_capability_rejects_unrecognized_commit_suffix(suffix: str) -> None:
+    clean = (FIXTURES / "version.stderr.txt").read_text(encoding="utf-8")
+    changed = clean.replace(
+        "ca94157f70a2776e8da6b6849b50b45a083d0478",
+        f"ca94157f70a2776e8da6b6849b50b45a083d0478{suffix}",
+        1,
+    )
+
+    with pytest.raises(LlamaServerGrammarError):
+        parse_version_capability(changed)
+
+
 def test_completion_response_is_strict_and_allows_immediate_eos() -> None:
     response = parse_completion_response(
         b'{"content":"","prompt":"strixlab-request-v1:abc\\nx","tokens":[]}'
