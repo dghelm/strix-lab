@@ -71,6 +71,23 @@ Challenge support begins only after immutable evidence, comparison judging, and
 the capsule process contract exist. The foundation merely keeps manifest and CLI
 registries extensible so later challenge kinds do not require restructuring.
 
+For the pilot, GitHub is the collaboration and catalog boundary—not an execution
+service. Existing suite manifests are called **scenarios**. A **candidate** is a
+reproducible change evaluated under one scenario; a local execution is a **run**;
+one contributor's matched baseline and candidate attempt—with a comparison when
+both pass correctness—is a **replication**; and the cataloged investigation of
+one candidate under one scenario is an **experiment**. An experiment may
+collect many replications.
+
+Scenario proposals begin as Issues and their immutable rules land through
+scenario PRs. Candidate experiments use separate PRs. Comments coordinate
+replications, but accepted summaries are copied into checked-in Markdown records
+before merge, with later observations added by follow-up PR. This deliberately
+avoids a premature submission API or database. A future site may render the
+repository catalog read-only; executing community candidate code on hosted GPU
+machines remains a separate security and operations problem, not an implied
+StrixLab capability.
+
 ## Common lexical rules
 
 - Dash identifier: `^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`

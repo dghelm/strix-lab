@@ -1,0 +1,61 @@
+name: Scenario proposal
+description: Propose a new reproducible benchmark question before implementing it.
+title: "scenario: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A scenario defines the benchmark question and rules. It is not a candidate optimization or a result submission. See `docs/community-workflow.md`.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What exact optimization question should this scenario answer?
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload and inputs
+      description: Describe the model, prompts or cases, source/runtime, and licensing or access constraints.
+    validations:
+      required: true
+  - type: textarea
+    id: correctness
+    attributes:
+      label: Correctness gates
+      description: What must pass before performance is interpreted?
+    validations:
+      required: true
+  - type: textarea
+    id: measurement
+    attributes:
+      label: Measurements
+      description: What is measured, how often, and which direction is better?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Hardware and software assumptions
+      description: State required GPU, memory, ROCm, toolchain, and other relevant constraints without unique machine identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: completion
+    attributes:
+      label: Completion criteria
+      description: What checked-in configs, tests, and documentation would make the scenario ready for experiments?
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      options:
+        - label: This proposes a scenario, not a candidate optimization or performance claim.
+          required: true
+        - label: The required inputs can be obtained legally and are not committed to this repository if private or heavyweight.
+          required: true
+        - label: The scenario can be executed locally without a StrixLab-hosted remote runner.
+          required: true
