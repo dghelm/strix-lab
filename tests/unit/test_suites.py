@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 import strixlab.build_cache as cache_module
+import strixlab.suites as suites_module
 from strixlab.adapters import backend_ops as _bo
 from strixlab.adapters import llama_bench as _lb
 from strixlab.adapters import llama_server as _ls
@@ -26,6 +27,7 @@ from strixlab.build_cache import (
     cleanup_build,
     lease_build,
 )
+from strixlab.build_runtime import BuildRuntimeEnvironment, RuntimeErrorFactory
 from strixlab.cli import app
 from strixlab.config import read_manifest
 from strixlab.evidence import RunOutcome, list_portable_entries, recover_runs
@@ -414,6 +416,70 @@ def test_resolve_target_executable_success(tmp_path: Path) -> None:
     path, sha = _resolve_target_executable(artifacts, "llama-bench", tmp_path)
     assert path == str(tmp_path / "bin/llama-bench")
     assert sha == "cd" * 32
+
+
+def test_private_build_runtime_helpers_delegate_with_suite_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts = fx._artifacts()
+    canonical = fx.canonical_record()
+    runtime = BuildRuntimeEnvironment({}, tmp_path / "cwd", tmp_path / "scratch")
+    calls: list[tuple[str, RuntimeErrorFactory]] = []
+
+    def artifact_delegate(
+        value: BuildArtifactsV1, target: str, *, error: RuntimeErrorFactory
+    ) -> tuple[str, str]:
+        assert value is artifacts
+        assert target == "llama-bench"
+        calls.append(("artifact", error))
+        return "bin/delegated", "a" * 64
+
+    def executable_delegate(
+        value: BuildArtifactsV1,
+        target: str,
+        root: Path,
+        *,
+        error: RuntimeErrorFactory,
+    ) -> tuple[str, str]:
+        assert value is artifacts
+        assert target == "llama-bench"
+        assert root == tmp_path
+        calls.append(("executable", error))
+        return str(tmp_path / "bin/delegated"), "b" * 64
+
+    def environment_delegate(
+        value: Any,
+        root: Path,
+        scratch_root: Path,
+        *,
+        error: RuntimeErrorFactory,
+    ) -> BuildRuntimeEnvironment:
+        assert value is canonical
+        assert root == tmp_path
+        assert scratch_root == tmp_path / "scratch"
+        calls.append(("environment", error))
+        return runtime
+
+    monkeypatch.setattr(suites_module, "_build_resolve_target_artifact", artifact_delegate)
+    monkeypatch.setattr(suites_module, "_build_resolve_target_executable", executable_delegate)
+    monkeypatch.setattr(suites_module, "_build_reconstruct_environment", environment_delegate)
+
+    assert suites_module._resolve_target_artifact(artifacts, "llama-bench") == (
+        "bin/delegated",
+        "a" * 64,
+    )
+    assert suites_module._resolve_target_executable(artifacts, "llama-bench", tmp_path) == (
+        str(tmp_path / "bin/delegated"),
+        "b" * 64,
+    )
+    assert (
+        suites_module._reconstruct_environment(canonical, tmp_path, tmp_path / "scratch") is runtime
+    )
+    assert calls == [
+        ("artifact", SuiteError),
+        ("executable", SuiteError),
+        ("environment", SuiteError),
+    ]
 
 
 @pytest.mark.parametrize(
