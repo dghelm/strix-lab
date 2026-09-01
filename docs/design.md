@@ -940,6 +940,99 @@ production implementations — making lock refusal, filesystem identity changes,
 and exact call order deterministic in unit tests without a GPU, ROCm, model weights,
 network, or real binaries.
 
+## Offline comparison judge v1
+
+The comparison judge (`strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID`) is the first
+boundary above the smoke suite. It is purely offline: it never reruns an adapter, acquires
+the GPU lock, inspects a live binary or model, or mutates either arm. It authenticates two
+**distinct, finalized, successful** smoke-suite runs, compares their matched throughput
+samples conservatively, and finalizes one immutable comparison run carrying a canonical
+JSON report and a Markdown rendering of it. Comparing a run to itself is rejected; a no-op
+comparison is two independently finalized runs, which may share the same build. A
+statistical `regression`, `mixed`, or `inconclusive` report is still a *successfully
+executed* comparison run — the evidence-run outcome and the statistical verdict are
+separate concepts, and the required no-op result is `inconclusive`, never a fabricated win.
+
+### Authenticated suite snapshot
+
+`load_finalized_suite_snapshot(run_id, *, home)` is the one reusable, descriptor-anchored
+seam the judge uses to obtain an immutable, fully re-authenticated view of one finalized
+successful run. It calls `inspect_run` (requiring `RunOutcome.SUCCESS` and retaining the
+authenticated `record-sha256` digest), then reads the resolved manifest and every portable
+blob through the shared `read_record_member` primitive — owned, no-follow, identity-checked
+reads that reject a symlink or same-uid inode swap during the read — and rebinds each byte
+to its content address. It parses `manifest.resolved.yaml` strictly as `SuiteManifestV1` and
+requires its bytes to equal `canonical_yaml_bytes` of that model's dump; authenticates the
+single `suite/result.json` summary entry and requires its bytes to equal `canonical_json_bytes`
+of the strictly parsed `SuiteResultV1`; binds the result's suite/machine/model IDs, passed
+status, correctness projections, and planned-equals-completed schedule to the manifest;
+authenticates the three input snapshots (`suite/build.json`, `suite/model.json`,
+`suite/machine.json`) and binds their payload IDs and digests to the result; and recomputes
+**every** correctness and measurement projection from the authenticated terminal adapter
+samples (`BackendOpsSampleV1`, `LlamaServerSampleV1`, `LlamaBenchSampleV1`), requiring the
+stored `BackendOpsVerdictV1`, each `GreedyVerdictV1` prompt, and every measurement
+projection to equal the recomputation exactly. `result.samples` must be the exact ordered
+schedule of a passed run (backend correctness, ordered greedy checks, ordered warmups, then
+ordered measurements) with no extra, missing, duplicated, or orphan reference, and the
+measurement coordinates must be exactly one projection per `(case_id, window)` with
+`repetitions_per_window` positive finite samples each. A canonical but semantically misbound
+record fails closed, and a tampered blob is rejected by the immutable record verifier before
+the snapshot loads.
+
+### Equivalence, statistics, and verdict
+
+Two arms are comparable only when their run IDs are distinct, their canonical resolved-manifest
+bytes are identical, their suite/machine/model IDs and their machine and model input-payload
+digests match (the build input may differ), their ordered measurement coordinates and
+repetition counts match exactly, and each case carries at least `MIN_PAIRED_SAMPLES = 5`
+paired samples. Build IDs, build-record digests, sample digests, and measurements may differ:
+this milestone compares two executions of the *same resolved suite*, never arbitrary
+compatible-looking workloads.
+
+Samples are paired by `(case_id, window, repetition_index)` in manifest order and compared
+only within the same performance case (higher is better); cases are never pooled and no
+cross-case score is invented. For positive finite pairs, the judge computes the paired
+log-delta mean with `math.fsum`, the arithmetic means, `speed_ratio = exp(mean_d)`, and
+`delta_percent = 100·expm1(mean_d)`. The `paired-log-bootstrap-v1` interval is exactly 4096
+replicate means and the R-7 95% percentile interval; each replicate resamples the paired log
+deltas with replacement, selecting indices from SHA-256 over a length-framed
+`strixlab.judge.bootstrap.v1` domain binding both arms' record digests, the case ID, and the
+zero-based replicate and draw indexes, so the interval is deterministic and bound to these two
+runs and this case only — it describes matched positions in these two runs, not run-to-run or
+population uncertainty. Baseline noise is `1.4826·MAD` of the baseline log values. The
+per-case verdict is `inconclusive` when the interval includes zero or `|mean_d|` is within the
+baseline noise, `improvement` when the interval is wholly above zero, and `regression`
+otherwise; the overall verdict is the exact projection (`inconclusive`/`improvement`/`regression`
+when uniform, else `mixed`). Every arithmetic domain/overflow failure, a nonpositive or
+non-finite value, and any report-model validation failure caused by the derived statistics is
+translated to a typed statistics error before any run is allocated.
+
+### Immutable comparison run and reports
+
+Before allocation the judge completely loads and re-authenticates both snapshots, checks
+equivalence, computes the statistics, instantiates the strict frozen report models
+(`ComparisonRequestV1`, `ComparisonArmV1`, `CaseComparisonV1`, `ComparisonReportV1`; each
+recomputes its verdict and validates every delta/CI/noise percentage against its log form with
+a single `rel_tol=abs_tol=1e-12` tolerance), renders the JSON and Markdown, and preflights the
+exact two portable outputs against the member, aggregate, entry, path, file-count, and
+single-media-per-blob rules. No arm payloads are copied, so capacity is bounded. The
+experiment ID is `compare-` plus the first 24 hex characters of SHA-256 over the canonical
+request JSON; the canonical request YAML is the captured input and its dump the resolved
+input. The run writes exactly `comparison/report.json` (`application/json`, role `comparison`)
+and `comparison/report.md` (`text/markdown`, role `comparison`) and finalizes
+`RunOutcome.SUCCESS` for every valid report. A load, equivalence, or statistics failure is a
+pre-allocation error that creates no run; a publication or integrity failure after allocation
+finalizes failure and surfaces the run ID and immutable record.
+
+The Markdown is a pure rendering of the validated report — identities and digests, policy, the
+scope warning, the overall verdict, and one stable table row per case — ending in exactly one
+newline with no environment-derived free text. Crucially, a comparison report authenticates
+its source run IDs, record digests, result digests, and the shared resolved-manifest digest,
+but it does **not** copy either arm's evidence tree. A comparison bundle is therefore a
+portable *derived* report, not a standalone proof of its arms: to verify the arms offline,
+export the two source-run bundles as well. The judge reuses the existing bundle system rather
+than building a second bundler.
+
 ## Versioning and schemas
 
 Manifest dispatch is by external kind plus integer `schema_version`. Version 1 is
