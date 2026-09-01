@@ -26,7 +26,8 @@ from strixlab.suites import TARGET_BACKEND_OPS, TARGET_LLAMA_BENCH, TARGET_LLAMA
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOURCE = _REPO_ROOT / "configs" / "sources" / "strix-llama.yaml"
-_BUILD = _REPO_ROOT / "configs" / "builds" / "hip-rocm-gfx1151.yaml"
+_ROCM72_BUILD = _REPO_ROOT / "configs" / "builds" / "hip-rocm-gfx1151.yaml"
+_ROCM10_BUILD = _REPO_ROOT / "configs" / "builds" / "hip-rocm10-gfx1151.yaml"
 _SUITE = _REPO_ROOT / "configs" / "suites" / "smoke-qwen35.yaml"
 _MACHINE = _REPO_ROOT / "configs" / "machines" / "strix-halo-128g.yaml"
 _MODELS_DIR = _REPO_ROOT / "configs" / "models"
@@ -51,10 +52,10 @@ def _source() -> SourceLockV1:
     return value
 
 
-def _build() -> BuildProfileV1:
+def _build(path: Path = _ROCM72_BUILD) -> BuildProfileV1:
     # ``resolve_and_validate_manifest`` validates the raw profile before resolving; the
     # pilot profile pins literal paths, so an empty environment leaves them unchanged.
-    value = resolve_and_validate_manifest("build", read_manifest(_BUILD), {})
+    value = resolve_and_validate_manifest("build", read_manifest(path), {})
     assert isinstance(value, BuildProfileV1)
     return value
 
@@ -116,23 +117,62 @@ def test_build_profile_targets_rocm_gfx1151_on_stable_paths() -> None:
     assert set(build.targets) == _REQUIRED_TARGETS
 
 
+def test_rocm10_build_profile_is_an_explicit_side_by_side_lane() -> None:
+    control = _build()
+    build = _build(_ROCM10_BUILD)
+
+    assert build.id == "hip-rocm10-gfx1151"
+    assert build.source == control.source == _SOURCE_ID
+    assert build.generator == control.generator == "Ninja"
+    assert build.build_type == control.build_type == "Release"
+    assert build.execution == control.execution
+    assert build.targets == control.targets
+
+    assert build.toolchain.mode == "rocm"
+    assert build.toolchain.prefixes == {"system": "/usr", "rocm": "/opt/rocm-10"}
+    assert build.toolchain.rocm_prefix == "/opt/rocm-10"
+    assert build.toolchain.c_compiler == "/opt/rocm-10/bin/amdclang"
+    assert build.toolchain.cxx_compiler == "/opt/rocm-10/bin/amdclang++"
+    assert build.toolchain.hip_compiler == "/opt/rocm-10/bin/amdclang++"
+    assert build.toolchain.path == ["/opt/rocm-10/bin", "/usr/bin"]
+    assert build.environment.path_lists == {
+        "ROCM_PATH": "/opt/rocm-10",
+        "LD_LIBRARY_PATH": "/opt/rocm-10/lib",
+    }
+
+    # Both arms ask CMake for the same build. Only the selected ROCm root differs.
+    common_cmake = {
+        "GGML_HIP": True,
+        "AMDGPU_TARGETS": _GFX_TARGET,
+        "GGML_NATIVE": False,
+        "BUILD_SHARED_LIBS": False,
+    }
+    for name, expected in common_cmake.items():
+        assert build.cmake[name] == control.cmake[name] == expected
+    assert control.cmake["CMAKE_HIP_COMPILER_ROCM_ROOT"] == "/opt/rocm"
+    assert build.cmake["CMAKE_HIP_COMPILER_ROCM_ROOT"] == "/opt/rocm-10"
+
+
 def test_source_build_suite_agree_on_source_commit_and_gfx() -> None:
     source = _source()
-    build = _build()
     suite = _suite()
     machine = _machine()
 
-    # Source id agreement across source lock, build profile, and suite build requirement.
-    assert source.id == build.source == suite.build.source_id == _SOURCE_ID
+    for build_path in (_ROCM72_BUILD, _ROCM10_BUILD):
+        build = _build(build_path)
+        # Source id agreement across source lock, build profile, and suite requirement.
+        assert source.id == build.source == suite.build.source_id == _SOURCE_ID
+        # Toolchain mode agreement between each profile and the suite requirement.
+        assert build.toolchain.mode == suite.build.toolchain_mode == "rocm"
+        # gfx1151 agreement across build CMake, suite target, and machine expectation.
+        assert build.cmake["AMDGPU_TARGETS"] == suite.build.gfx_target
+        assert build.cmake["AMDGPU_TARGETS"] == machine.expect.gpu_arch
+        # Both build profiles produce exactly the three targets the suite composes.
+        assert set(build.targets) == _REQUIRED_TARGETS
+
     # Pinned commit agreement between the source lock and the suite build requirement.
     assert source.commit == suite.build.source_commit == _PINNED_COMMIT
-    # Toolchain mode agreement between the build profile and suite build requirement.
-    assert build.toolchain.mode == suite.build.toolchain_mode == "rocm"
-    # gfx1151 agreement across the build cmake, suite target, and machine expectation.
-    assert build.cmake["AMDGPU_TARGETS"] == suite.build.gfx_target == machine.expect.gpu_arch
     assert suite.build.gfx_target == _GFX_TARGET
-    # The build produces exactly the three targets the suite composes.
-    assert set(build.targets) == _REQUIRED_TARGETS
     # The suite binds a checked-in machine and registered model config.
     assert suite.machine == machine.id
     assert suite.correctness.backend_ops.params_regex == _BACKEND_PARAMS_REGEX
