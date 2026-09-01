@@ -140,6 +140,21 @@ uv run strixlab bundle export "$COMPARISON_RUN_ID" "../strixlab-bundle-$COMPARIS
 uv run strixlab bundle export "$CANDIDATE_RUN_ID" "../strixlab-bundle-$CANDIDATE_RUN_ID"
 ```
 
+### ROCm 10 side-by-side bring-up
+
+The installed `/opt/rocm` lane remains the ROCm 7.2.4 control. A separate
+`configs/builds/hip-rocm10-gfx1151.yaml` profile describes the expected
+`/opt/rocm-10` ROCm Core SDK 10.0.0 lane without changing global paths or system
+alternatives. This lane is provisional, inactive, and not runnable until both its
+artifact-authenticity gate and its separately reviewed prefix-inventory verifier
+gate are cleared. The profile is not an installer and its environment is not
+proof of runtime isolation; build evidence also cannot authenticate untracked
+external ROCm library bytes.
+
+Read [`docs/rocm10-bringup.md`](docs/rocm10-bringup.md) before provisioning or
+using that prefix. It records the current blockers, every later human-approved
+system mutation, and the required same-source no-op build comparison.
+
 The quoted `...` assignments are deliberate copy points, not literal values.
 Run the pilot from a credential-clean shell: StrixLab scans evidence and terminal
 output for values held in sensitive-named environment variables and fails closed

@@ -35,6 +35,19 @@ uv build
 
 ## Self-service smoke suite (real Strix Halo only)
 
+The default `configs/builds/hip-rocm-gfx1151.yaml` profile is the installed ROCm
+7.2.4 control. ROCm 10 work must use the distinct
+`configs/builds/hip-rocm10-gfx1151.yaml` profile and follow
+`docs/rocm10-bringup.md`. That lane is provisional, inactive, and not runnable;
+do not download, extract, execute, or install ROCm 10, create `/opt/rocm-10`, or
+change `/opt/rocm`, alternatives, packages, drivers, or shell startup files.
+Activation requires a vendor authenticity anchor or explicit human risk
+acceptance plus a separately reviewed isolation plan. It also requires a
+separately reviewed, versioned prefix inventory verifier proving staged versus
+installed equality and later baseline equality. No such verifier exists in this
+branch. A selected environment is not loaded-library proof; attested CMake,
+binary-hash, `readelf`, and `ldd` evidence do not hash external ROCm library bytes.
+
 Prerequisites: ROCm at `/opt/rocm`, the pinned GGUF kept outside the repository,
 and a credential-clean shell. StrixLab does not download weights. Set `MODELS`
 so the file declared by `configs/models/qwen35-4b-smoke.yaml` exists at
