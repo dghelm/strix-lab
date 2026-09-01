@@ -19,8 +19,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import os
-import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
@@ -56,7 +54,18 @@ from strixlab.adapters.llama_server import (
 )
 from strixlab.build_artifacts import BuildArtifactsV1
 from strixlab.build_cache import BuildCacheError, BuildLease, CanonicalBuildRecordV1, lease_build
-from strixlab.build_identity import ROOT_PLACEHOLDERS
+from strixlab.build_runtime import (
+    BuildRuntimeEnvironment as _RuntimeEnvironment,
+)
+from strixlab.build_runtime import (
+    reconstruct_environment as _build_reconstruct_environment,
+)
+from strixlab.build_runtime import (
+    resolve_target_artifact as _build_resolve_target_artifact,
+)
+from strixlab.build_runtime import (
+    resolve_target_executable as _build_resolve_target_executable,
+)
 from strixlab.evidence import (
     Clock,
     PortableEvidenceV1,
@@ -111,12 +120,8 @@ TARGET_BACKEND_OPS = "test-backend-ops"
 TARGET_LLAMA_SERVER = "llama-server"
 TARGET_LLAMA_BENCH = "llama-bench"
 
-# ROCm-mode gfx selection entry name and the sole rehydratable placeholder.
+# ROCm-mode gfx selection entry name.
 _GFX_SELECTION_NAME = "gfx_targets"
-_BUILD_ROOT_PLACEHOLDER = ROOT_PLACEHOLDERS["BUILD_ROOT"]
-_PLACEHOLDER_RE = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
-_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_REQUIRED_LOCALE = {"LANG": "C", "LC_ALL": "C", "TZ": "UTC"}
 
 _ADAPTER_INTEGRITY_ERRORS = (
     BackendOpsIntegrityError,
@@ -503,112 +508,19 @@ def _validate_suite_input_eligibility(
 
 
 def _resolve_target_artifact(artifacts: BuildArtifactsV1, target_name: str) -> tuple[str, str]:
-    """Resolve one required target to its unique relative path and recorded digest."""
-
-    named = [target for target in artifacts.targets if target.name == target_name]
-    if len(named) != 1:
-        raise SuiteError(f"build target is missing or ambiguous: {target_name}")
-    if named[0].target_type != "EXECUTABLE":
-        raise SuiteError(f"build target is not an executable: {target_name}")
-    candidates = [
-        artifact
-        for artifact in artifacts.artifacts
-        if target_name in artifact.targets
-        and artifact.kind == "elf"
-        and artifact.elf_type in ("ET_EXEC", "ET_DYN")
-        and not artifact.runtime_dependency
-    ]
-    if len(candidates) != 1:
-        raise SuiteError(f"expected exactly one executable artifact for target: {target_name}")
-    artifact = candidates[0]
-    relative = PurePosixPath(artifact.path)
-    if relative.is_absolute() or ".." in relative.parts:
-        raise SuiteError(f"build artifact escapes the leased root: {target_name}")
-    return artifact.path, artifact.sha256
+    return _build_resolve_target_artifact(artifacts, target_name, error=SuiteError)
 
 
 def _resolve_target_executable(
     artifacts: BuildArtifactsV1, target_name: str, root: Path
 ) -> tuple[str, str]:
-    """Resolve one required target to an absolute executable path and recorded digest."""
-
-    relative, digest = _resolve_target_artifact(artifacts, target_name)
-    return str(root / PurePosixPath(relative)), digest
-
-
-# --- Hermetic runtime environment ---------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _RuntimeEnvironment:
-    environment: dict[str, str]
-    cwd: Path
-    scratch_root: Path
+    return _build_resolve_target_executable(artifacts, target_name, root, error=SuiteError)
 
 
 def _reconstruct_environment(
     canonical: CanonicalBuildRecordV1, root: Path, scratch_root: Path
 ) -> _RuntimeEnvironment:
-    """Rebuild the adapter child environment from the leased canonical build tuple.
-
-    Never inherits ambient ``os.environ``. Component-boundary rehydration replaces an
-    exact ``{BUILD_ROOT}`` component (or one beginning ``{BUILD_ROOT}`` + ``os.sep``)
-    with the leased root; ``HOME`` and ``TMPDIR`` are replaced with fresh directories
-    under one mode-0700 temporary root. A residual ``{SOURCE_ROOT}``/``{BUILD_HOME}``/
-    ``{BUILD_TMP}`` or any other placeholder-shaped component, a NUL, a duplicate name,
-    an invalid name, a missing ``HOME``/``TMPDIR``, or a wrong locale/time value fails
-    closed.
-    """
-
-    scratch_home = scratch_root / "home"
-    scratch_tmp = scratch_root / "tmp"
-    for path in (scratch_home, scratch_tmp):
-        path.mkdir(mode=0o700)
-
-    seen: set[str] = set()
-    environment: dict[str, str] = {}
-    root_str = str(root)
-    for entry in canonical.environment:
-        if _ENV_NAME_RE.fullmatch(entry.name) is None:
-            raise SuiteError(f"leased build environment has an invalid name: {entry.name!r}")
-        if entry.name in seen:
-            raise SuiteError(f"leased build environment has a duplicate name: {entry.name!r}")
-        seen.add(entry.name)
-        if "\x00" in entry.name or "\x00" in entry.value:
-            raise SuiteError("leased build environment contains a NUL byte")
-        if entry.name == "HOME":
-            environment["HOME"] = str(scratch_home)
-        elif entry.name == "TMPDIR":
-            environment["TMPDIR"] = str(scratch_tmp)
-        else:
-            environment[entry.name] = _rehydrate_value(entry.value, root_str)
-
-    for name in ("HOME", "TMPDIR"):
-        if name not in seen:
-            raise SuiteError(f"leased build environment is missing {name}")
-    for name, expected in _REQUIRED_LOCALE.items():
-        if environment.get(name) != expected:
-            raise SuiteError(f"leased build environment has an unexpected {name}")
-    return _RuntimeEnvironment(environment=environment, cwd=scratch_tmp, scratch_root=scratch_root)
-
-
-def _rehydrate_value(value: str, root: str) -> str:
-    return os.pathsep.join(
-        _rehydrate_component(component, root) for component in value.split(os.pathsep)
-    )
-
-
-def _rehydrate_component(component: str, root: str) -> str:
-    if component == _BUILD_ROOT_PLACEHOLDER:
-        return root
-    if component.startswith(_BUILD_ROOT_PLACEHOLDER + os.sep):
-        rest = component[len(_BUILD_ROOT_PLACEHOLDER) :]
-        if _PLACEHOLDER_RE.search(rest):
-            raise SuiteError("leased build environment component has an unexpected placeholder")
-        return root + rest
-    if _PLACEHOLDER_RE.search(component):
-        raise SuiteError("leased build environment component has an unknown placeholder")
-    return component
+    return _build_reconstruct_environment(canonical, root, scratch_root, error=SuiteError)
 
 
 # --- Adapter sample authentication --------------------------------------------
