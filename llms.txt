@@ -12,6 +12,12 @@ patch bot.
 - Use `uv`. There is no second task runner and no pre-commit framework.
 - Keep changes narrow, evidence-oriented, and independently testable.
 
+## Planned scenarios
+
+- `docs/rocm10-topk-gfx1151.md` fixes the planned ROCm 10 top-k contract and
+  CAPSULE-001/TOPK-001 sequence. It is not runnable: do not invent a suite
+  manifest or experiment until the documented capsule seam exists.
+
 ## Repository validation (no special hardware)
 
 Run this path to validate a clean checkout without any GPU:

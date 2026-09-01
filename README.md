@@ -47,6 +47,12 @@ A clean checkout provides a strict, evidence-oriented CLI:
 Community experiments (see below) are locally executed, reviewable
 investigations—not remotely executed submissions or official scores.
 
+### Planned scenarios
+
+- [ROCm 10 top-k on gfx1151](docs/rocm10-topk-gfx1151.md) is a reviewed scenario
+  contract and staged implementation plan. It is explicitly not runnable yet;
+  no current suite manifest or CLI path executes it.
+
 ## Requirements
 
 - Linux
