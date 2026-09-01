@@ -58,6 +58,79 @@ Manifest handling has two deliberate entry points:
 Mapping keys are never interpolated. Environment replacements may not introduce
 unresolved tokens unless explicitly escaped as literals.
 
+## Native capsule v1 library boundary (inactive)
+
+`CAPSULE-001A` defines a library-only protocol and evidence adapter. It is intentionally
+inactive: there is no runnable capsule configuration, CLI command, provider registry,
+comparison path, or implicit integration with the suite runtime. A trusted caller must
+already hold an active `RunSession` and supply the resolved `CapsuleManifestV1` plus its
+digest, a trusted absolute executable path plus expected SHA-256, a complete child
+environment and working directory, a caller-owned scratch root, and the applicable
+redaction context. The adapter does not lease or build artifacts, acquire a machine lock,
+observe hardware, reconstruct an environment, begin or finalize a run, or decide the
+caller's overall run outcome.
+
+The frozen capsule manifest binds `id`, opaque dash-identifier `candidate`, `machine`,
+and an authoritative build requirement: `source_id`, exact 40-character
+`source_commit`, `toolchain_mode` (`host` or `rocm`), `gfx_target`, and executable
+`target`. No profile label substitutes for those leased-build coordinates. Its contract
+is exactly `native-capsule-v1` and pins `scenario_sha256`. Independent `describe`,
+`correctness`, and `benchmark` timeouts are finite, positive, and at most 3600 seconds.
+
+The adapter executes exactly three allowlisted child operations, in this order:
+`describe`, `correctness`, then `benchmark`. Each argv is fixed as
+`<trusted-executable> <operation> --request /proc/self/fd/<N>`; the literal
+`--request` marker and four-entry argv are mandatory, with no shell, discovery,
+free-form flag, or child-selected path. `<N>` is an inherited descriptor opened read-only
+over an immutable, write/grow/shrink/seal-locked memfd containing the exact canonical
+JSON request. The child receives only the caller's complete
+environment (`inherit_env=False`) and cwd. Stdout and stderr have independent hard byte
+bounds and the process always runs through the shared bounded runner. The executable is
+stream-hashed for stable descriptor metadata and content, matched to the caller's digest,
+and rechecked immediately before and after every child and once more before terminal
+publication. Request descriptors are checked against their pre-launch identity, seals,
+read-only access mode, and exact bytes; captured stream spools are independently checked
+against their exact bytes, sizes, and SHA-256 values.
+
+Every request binds protocol, operation, capsule ID, opaque candidate ID, scenario SHA,
+manifest SHA, and executable SHA. `correctness` carries the accepted `describe` response
+SHA, while `benchmark` carries the accepted `correctness` response SHA; both later
+requests also carry the accepted typed scenario contract and its digest. Every response
+must be exact UTF-8 canonical JSON and echo all of those bindings. Noncanonical JSON,
+unknown fields, coercible values, wrong echoes, non-finite values, or a response outside
+the hard bound is rejected. An optional canonical opaque payload is limited to 256 KiB
+and retained only in raw response evidence. It is deliberately absent from the generic
+terminal result and never participates in correctness, equivalence, statistics, or
+pass/fail; a later scenario-specific implementation such as `TOPK-001` may interpret it.
+
+`describe` returns the complete ordered scenario contract. Each zero-based, ordered,
+unique coordinate declares its exact coordinate ID, training/evaluation set, mode,
+input ID and SHA-256, warmup and sample counts, `latency-seconds`,
+`lower-is-better`, and `topk-paired-log-bootstrap-v1`. `correctness` must reproduce those
+coordinates exactly, without omission, duplication, or reordering, and every coordinate
+must pass before `benchmark` can start. `benchmark` must reproduce the same coordinates
+exactly and report exactly the declared number of positive finite ordered latency samples
+plus nonnegative workspace bytes for each. The typed terminal result preserves all of
+these generic comparison inputs without applying comparison or scenario-specific
+payload policy.
+
+Portable evidence is confined to `capsule/protocol/{describe,correctness,benchmark}/`:
+canonical `request.json`, a secret-free `process.json`, canonical `stdout.json` when
+accepted as canonical JSON or one text fallback otherwise, and optional exact UTF-8
+`stderr.txt`. Correctness roles are used for describe/correctness, samples roles for
+benchmark, and the summary role for `capsule/protocol/result.json`, which is always
+published last. Exact bytes are never duplicated under conflicting media types. Every
+prospective artifact is secret-scanned before publication, and the active `RunSession`
+rechecks it at the write boundary.
+
+Ordinary spawn, timeout, output-limit, exit, parsing, echo, correctness, coverage, and
+sample-completeness failures produce a strict `failed` protocol result with the truthful
+completed-prefix evidence. Unsafe child output is withheld and produces a safe failed
+result. Executable mismatch/drift, request or spool divergence, a pre-existing protocol
+subtree, or a publication-integrity failure raises `CapsuleIntegrityError`; such a path
+never publishes a success claim. In every case the caller remains solely responsible for
+the enclosing run's terminal outcome.
+
 ## Future challenge boundary
 
 StrixLab may later own local challenge bundles, capsules, practice runs, evidence,
