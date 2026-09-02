@@ -35,6 +35,7 @@ from pydantic import (
     model_validator,
 )
 
+from strixlab.capsule_contracts import CapsuleComparisonContractV1
 from strixlab.evidence import RunError, RunSession, list_portable_entries
 from strixlab.executable_identity import (
     ExecutableIdentity,
@@ -127,7 +128,7 @@ class _CapsuleModel(BaseModel):
 
 PositiveLatency = Annotated[StrictFloat, Field(gt=0)]
 NonNegativeBytes = Annotated[StrictInt, Field(ge=0)]
-SampleCount = Annotated[StrictInt, Field(ge=1, le=MAX_SAMPLES_PER_COORDINATE)]
+SampleCount = Annotated[StrictInt, Field(ge=5, le=MAX_SAMPLES_PER_COORDINATE)]
 WarmupCount = Annotated[StrictInt, Field(ge=0, le=MAX_SAMPLES_PER_COORDINATE)]
 
 
@@ -135,6 +136,7 @@ class CapsuleCoordinateV1(_CapsuleModel):
     """One exact ordered comparison coordinate declared by ``describe``."""
 
     coordinate_id: DashId
+    case_id: DashId
     case_set: Literal["training", "evaluation"]
     mode: DashId
     order: Annotated[StrictInt, Field(ge=0, lt=MAX_COORDINATES)]
@@ -142,15 +144,13 @@ class CapsuleCoordinateV1(_CapsuleModel):
     input_sha256: Sha256Lower
     warmup_count: WarmupCount
     sample_count: SampleCount
-    metric: Literal["latency-seconds"] = "latency-seconds"
-    direction: Literal["lower-is-better"] = "lower-is-better"
-    policy: Literal["topk-paired-log-bootstrap-v1"] = "topk-paired-log-bootstrap-v1"
 
 
 class CapsuleScenarioContractV1(_CapsuleModel):
     """The comparison-complete, scenario-pinned contract returned by ``describe``."""
 
     schema_version: Literal[1] = 1
+    comparison: CapsuleComparisonContractV1
     coordinates: Annotated[tuple[CapsuleCoordinateV1, ...], Field(min_length=1)]
 
     @model_validator(mode="after")
@@ -160,8 +160,19 @@ class CapsuleScenarioContractV1(_CapsuleModel):
         ids = tuple(value.coordinate_id for value in self.coordinates)
         if len(ids) != len(set(ids)):
             raise ValueError("coordinate ids must be unique")
+        case_modes = tuple((value.case_id, value.mode) for value in self.coordinates)
+        if len(case_modes) != len(set(case_modes)):
+            raise ValueError("case id and mode pairs must be unique")
+        if not any(value.case_set == "evaluation" for value in self.coordinates):
+            raise ValueError("scenario must contain at least one evaluation coordinate")
         if tuple(value.order for value in self.coordinates) != tuple(range(len(self.coordinates))):
             raise ValueError("coordinate order must be the exact zero-based tuple order")
+        case_inputs: dict[str, tuple[str, str, str]] = {}
+        for coordinate in self.coordinates:
+            identity = (coordinate.case_set, coordinate.input_id, coordinate.input_sha256)
+            prior = case_inputs.setdefault(coordinate.case_id, identity)
+            if prior != identity:
+                raise ValueError("coordinates sharing a case id must share set and input identity")
         return self
 
 
@@ -859,6 +870,7 @@ def _execute_phase(
     environment: Mapping[str, str],
     scratch_root: Path,
     timeout: float,
+    expected_comparison: CapsuleComparisonContractV1 | None = None,
 ) -> _ExecutedPhase:
     request_bytes = canonical_json_bytes(request.model_dump(mode="json"))
     try:
@@ -931,7 +943,14 @@ def _execute_phase(
         except ValidationError:
             invalid_kind = "response"
         else:
-            if not _binding_matches(candidate_response, request, request_sha256):
+            comparison_matches = operation != "describe" or (
+                isinstance(candidate_response, DescribeResponseV1)
+                and candidate_response.scenario.comparison == expected_comparison
+            )
+            if (
+                not _binding_matches(candidate_response, request, request_sha256)
+                or not comparison_matches
+            ):
                 invalid_kind = "response"
             else:
                 response = candidate_response
@@ -1087,6 +1106,7 @@ def run_capsule_protocol(
         environment=environment,
         scratch_root=scratch_root,
         timeout=manifest.timeouts.describe_seconds,
+        expected_comparison=manifest.contract.comparison,
     )
     phases.append(describe.phase)
     if describe.response is None:

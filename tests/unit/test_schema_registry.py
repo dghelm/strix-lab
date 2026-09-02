@@ -173,6 +173,12 @@ def test_build_schema_rejects_trailing_line_terminators(
         lambda value: value["timeouts"].update(describe_seconds=3600.1),
         lambda value: value["timeouts"].update(correctness_seconds=0),
         lambda value: value["timeouts"].update(benchmark_seconds=3601),
+        lambda value: value["contract"].pop("comparison"),
+        lambda value: value["contract"]["comparison"].update(policy="topk-paired-log-bootstrap-v1"),
+        lambda value: value["contract"]["comparison"].update(protected_regression_bps=10_001),
+        lambda value: value["contract"]["comparison"].update(
+            permitted_arm_differences=["candidate-id", "build-output"]
+        ),
     ],
 )
 def test_capsule_schema_matches_authoritative_runtime_contract(

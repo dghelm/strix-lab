@@ -23,17 +23,24 @@ def digest(value: bytes) -> str:
 
 def scenario() -> dict[str, Any]:
     common = {
-        "direction": "lower-is-better",
-        "metric": "latency-seconds",
-        "policy": "topk-paired-log-bootstrap-v1",
-        "sample_count": 3,
+        "sample_count": 5,
         "warmup_count": 1,
     }
     return {
         "schema_version": 1,
+        "comparison": {
+            "policy": "paired-latency-log-bootstrap-v1",
+            "protected_regression_bps": 500,
+            "permitted_arm_differences": [
+                "candidate-id",
+                "source-candidate",
+                "build-output",
+            ],
+        },
         "coordinates": [
             {
                 **common,
+                "case_id": "train-case",
                 "case_set": "training",
                 "coordinate_id": "train-forward",
                 "input_id": "train-a",
@@ -43,6 +50,7 @@ def scenario() -> dict[str, Any]:
             },
             {
                 **common,
+                "case_id": "eval-case",
                 "case_set": "evaluation",
                 "coordinate_id": "eval-reverse",
                 "input_id": "eval-a",
@@ -169,7 +177,7 @@ def main() -> int:
         coordinates = [
             {
                 "coordinate": coordinate,
-                "latency_seconds": [0.01, 0.011, 0.012],
+                "latency_seconds": [0.01, 0.011, 0.012, 0.013, 0.014],
                 "workspace_bytes": 4096 + 1024 * index,
             }
             for index, coordinate in enumerate(request["scenario"]["coordinates"])
@@ -208,6 +216,8 @@ def main() -> int:
         response["scenario_contract_sha256"] = "0" * 64
     if mode == f"unknown-field-{operation}":
         response["unexpected"] = True
+    if mode == "wrong-comparison-describe":
+        response["scenario"]["comparison"]["protected_regression_bps"] = 501
     if mode == "coercible-describe":
         response["scenario"]["coordinates"][0]["order"] = "0"
     if mode == f"oversize-opaque-{operation}":

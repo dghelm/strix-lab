@@ -43,10 +43,66 @@
       "title": "CapsuleBuildRequirementV1",
       "type": "object"
     },
+    "CapsuleComparisonContractV1": {
+      "additionalProperties": false,
+      "description": "The only generic paired-latency comparison policy admitted by capsule v1.",
+      "properties": {
+        "permitted_arm_differences": {
+          "enum": [
+            [
+              "candidate-id"
+            ],
+            [
+              "candidate-id",
+              "source-candidate",
+              "build-output"
+            ]
+          ],
+          "items": {
+            "enum": [
+              "candidate-id",
+              "source-candidate",
+              "build-output"
+            ],
+            "type": "string"
+          },
+          "title": "Permitted Arm Differences",
+          "type": "array"
+        },
+        "policy": {
+          "const": "paired-latency-log-bootstrap-v1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "protected_regression_bps": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Protected Regression Bps"
+        }
+      },
+      "required": [
+        "policy",
+        "protected_regression_bps",
+        "permitted_arm_differences"
+      ],
+      "title": "CapsuleComparisonContractV1",
+      "type": "object"
+    },
     "CapsuleContractV1": {
       "additionalProperties": false,
       "description": "The fixed process protocol and immutable scenario identity.",
       "properties": {
+        "comparison": {
+          "$ref": "#/$defs/CapsuleComparisonContractV1"
+        },
         "protocol": {
           "const": "native-capsule-v1",
           "title": "Protocol",
@@ -60,7 +116,8 @@
       },
       "required": [
         "protocol",
-        "scenario_sha256"
+        "scenario_sha256",
+        "comparison"
       ],
       "title": "CapsuleContractV1",
       "type": "object"
