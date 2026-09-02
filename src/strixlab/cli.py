@@ -22,8 +22,13 @@ from strixlab.builds import (
     inspect_recipe,
 )
 from strixlab.bundles import BundleError, export_bundle, verify_bundle
+from strixlab.capsule_runs import (
+    CapsuleExecutionError,
+    CapsuleRunError,
+    run_capsule,
+)
 from strixlab.cmake_build import CMakeBuildError, execute_cmake_build
-from strixlab.config import read_manifest
+from strixlab.config import parse_manifest_text, read_manifest
 from strixlab.doctor import (
     ReportWriteError,
     SensitiveInterpolationError,
@@ -34,6 +39,7 @@ from strixlab.git_boundary import GitBoundaryError, SshTrust
 from strixlab.judge import JudgeError, JudgeExecutionError, compare_runs
 from strixlab.manifests import (
     BuildProfileV1,
+    CapsuleManifestV1,
     MachineProfileV1,
     ManifestRegistry,
     ModelManifestV1,
@@ -50,7 +56,7 @@ from strixlab.models import (
 from strixlab.paths import resolve_home
 from strixlab.records import RecordError
 from strixlab.schema_registry import schema_resource_bytes
-from strixlab.secret_policy import RedactionContext
+from strixlab.secret_policy import RedactionContext, reject_sensitive_interpolations
 from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
@@ -642,6 +648,85 @@ def run_suite_command(
     _evidence_echo(f"record: {outcome.inspection.record}", context, err=stream_err)
     _evidence_echo(
         f"suite: {outcome.result.status} ({outcome.result.reason})", context, err=stream_err
+    )
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@run_app.command("capsule")
+def capsule_run_command(
+    capsule: Annotated[Path, typer.Argument(help="Versioned capsule manifest YAML path.")],
+    machine: Annotated[
+        Path,
+        typer.Option("--machine", help="Resolved machine-profile YAML path."),
+    ],
+    build: Annotated[str, typer.Option("--build", help="Machine-local build ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Run one verified native capsule and finalize an immutable run."""
+
+    environ, context = _evidence_terminal_context()
+    try:
+        manifest_input = capsule.read_bytes()
+        raw_capsule = parse_manifest_text(manifest_input.decode("utf-8"))
+        reject_sensitive_interpolations(raw_capsule)
+        manifest = resolve_and_validate_manifest("capsule", raw_capsule, environ)
+        if not isinstance(manifest, CapsuleManifestV1):
+            raise TypeError("capsule registry returned the wrong model")
+        raw_machine = read_manifest(machine)
+        reject_sensitive_interpolations(raw_machine)
+        machine_profile = resolve_and_validate_manifest("machine", raw_machine, environ)
+        if not isinstance(machine_profile, MachineProfileV1):
+            raise TypeError("machine registry returned the wrong model")
+    except ValidationError as exc:
+        _evidence_echo("invalid capsule invocation:", context, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _evidence_echo(f"  {location}: {error['msg']}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        _evidence_echo(
+            "invalid capsule invocation: sensitive environment interpolation is forbidden",
+            context,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        _evidence_echo("capsule run failed: unable to validate invocation", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        outcome = run_capsule(
+            manifest,
+            manifest_input,
+            machine_profile=machine_profile,
+            build_id=build,
+            home=resolve_home(home),
+            environ=environ,
+        )
+    except CapsuleExecutionError as exc:
+        _evidence_echo(f"run: {exc.run_id}", context, err=True)
+        if exc.record is not None:
+            _evidence_echo(f"record: {exc.record}", context, err=True)
+        _evidence_echo(f"capsule run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except CapsuleRunError:
+        _evidence_echo("capsule run failed before allocating a run", context, err=True)
+        raise typer.Exit(code=1) from None
+    except _EVIDENCE_DOMAIN_ERRORS:
+        _evidence_echo("capsule run failed: unable to complete invocation", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    failed = outcome.outcome is not RunOutcome.SUCCESS
+    _evidence_echo(f"run: {outcome.run_id}", context, err=failed)
+    _evidence_echo(f"record: {outcome.inspection.record}", context, err=failed)
+    _evidence_echo(
+        f"capsule: {outcome.result.status} ({outcome.result.reason})",
+        context,
+        err=failed,
     )
     if failed:
         raise typer.Exit(code=1)

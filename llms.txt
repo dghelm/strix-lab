@@ -15,8 +15,8 @@ patch bot.
 ## Planned scenarios
 
 - `docs/rocm10-topk-gfx1151.md` fixes the planned ROCm 10 top-k contract and
-  CAPSULE-001/TOPK-001 sequence. It is not runnable: do not invent a suite
-  manifest or experiment until the documented capsule seam exists.
+  CAPSULE-001/TOPK-001 sequence. The generic capsule runner exists, but no checked-in
+  capsule manifest or TOPK payload interpretation makes that scenario runnable.
 
 ## Repository validation (no special hardware)
 

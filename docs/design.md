@@ -58,11 +58,10 @@ Manifest handling has two deliberate entry points:
 Mapping keys are never interpolated. Environment replacements may not introduce
 unresolved tokens unless explicitly escaped as literals.
 
-## Native capsule v1 library boundary (inactive)
+## Native capsule v1 boundary
 
-`CAPSULE-001A` defines a library-only protocol and evidence adapter. It is intentionally
-inactive: there is no runnable capsule configuration, CLI command, provider registry,
-comparison path, or implicit integration with the suite runtime. A trusted caller must
+`CAPSULE-001A` defines a library-only protocol and evidence adapter. It has no provider
+registry, comparison path, or implicit integration with the suite runtime. A trusted caller must
 already hold an active `RunSession` and supply the resolved `CapsuleManifestV1` plus its
 digest, a trusted absolute executable path plus expected SHA-256, a complete child
 environment and working directory, a caller-owned scratch root, and the applicable
@@ -130,6 +129,40 @@ result. Executable mismatch/drift, request or spool divergence, a pre-existing p
 subtree, or a publication-integrity failure raises `CapsuleIntegrityError`; such a path
 never publishes a success claim. In every case the caller remains solely responsible for
 the enclosing run's terminal outcome.
+
+`CAPSULE-001C` adds the narrow production caller for that adapter and the command
+`strixlab run capsule CAPSULE_MANIFEST --machine MACHINE_MANIFEST --build BUILD_ID
+[--home PATH]`. It leases only the named existing build; it never leases a source or
+creates either source or build state. Before allocating a run it requires the exact
+machine ID, source ID and base commit, toolchain mode, requested gfx membership, and
+unique executable target recorded by the canonical leased build, then reverifies the
+lease. The SHA-256 passed to the adapter is computed from the exact canonical
+`manifest.resolved.yaml` serialization used by `begin_run`.
+
+Acquisition order is build lease, `RunSession`, then machine lock; release is the reverse.
+After run allocation, the complete canonical `capsule/build.json` and
+`capsule/machine.json` payloads are preflighted together against the union of ambient and
+canonical-child secrets before either is published, then published in that order. A lock
+refusal produces a strict failed enclosing
+`capsule/result.json` without executing the protocol. Under an acquired lock the runner
+allocates a mode-0700 scratch root, reconstructs the complete canonical child environment
+without ambient inheritance, invokes the library adapter, and removes scratch on every
+exit. It reverifies the build lease while the machine lock is still held and publishes the
+enclosing `capsule/result.json` only after authenticating the adapter's actual portable
+`capsule/protocol/result.json` entry against the returned canonical result bytes. The
+enclosing result binds that digest, the manifest target, the recorded executable digest,
+and the protocol's exact closed reason without embedding a duplicate protocol result; the
+run succeeds if and only if the protocol passed. Trusted executable and scratch
+host-absolute paths never enter portable evidence.
+
+Failures before allocation raise `CapsuleRunError` and create no run. Any exception after
+allocation finalizes failure and raises `CapsuleExecutionError`, which exposes only the run
+ID, an optional finalized record, and one fixed safe message. Ordinary protocol failures
+remain structured failed results. CLI diagnostics use the ambient redaction context and do
+not relay child output, exception causes, or free-form failure text. The generic runner is
+available, but the planned TOPK scenario remains inactive: there is no checked-in runnable
+capsule configuration, finalized capsule snapshot loader, comparison path, or TOPK payload
+interpretation.
 
 ## Future challenge boundary
 
