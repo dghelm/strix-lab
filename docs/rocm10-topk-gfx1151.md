@@ -1,9 +1,10 @@
 # Planned ROCm 10 top-k scenario for gfx1151
 
 > **Status: planned; not runnable.** The generic native-capsule protocol, production
-> runner, finalized snapshot authentication, and closed comparison contract are
-> delivered. There is still intentionally no runnable top-k capsule manifest: D2b
-> comparison execution and TOPK-001 payload/provider semantics remain deferred. Do not
+> runner, finalized snapshot authentication, closed comparison contract, and pure offline
+> directional comparison are delivered. There is still intentionally no runnable top-k
+> capsule manifest: comparison evidence/CLI dispatch and TOPK-001 payload/provider
+> semantics remain deferred. Do not
 > create experiments until the trusted TOPK capsule and versioned scenario manifest land.
 
 The planned scenario asks which one trusted top-k provider gives the best
@@ -27,15 +28,14 @@ comparison contract. This top-k scenario is still inactive because:
   model-bound suite results.
 - the comparison judge authenticates and compares those finalized model-suite
   results and their throughput samples.
-- D2b two-arm capsule admission, statistics, verdict/report evidence, and CLI dispatch
-  are deferred;
+- derived comparison evidence and CLI dispatch are deferred;
 - there is no trusted top-k payload interpreter, provider implementation/registry,
   correctness reference, or runnable capsule manifest.
 
 Forcing top-k through the llama-server adapter would obscure the operation boundary and
 invent model inputs that the capsule does not need. The delivered capsule seam remains
-narrow and has no adapter plugin ABI or generic workflow engine; the missing work is the
-explicit deferred comparison executor and the scenario-specific trusted TOPK capsule.
+narrow and has no adapter plugin ABI or generic workflow engine; the missing work is
+comparison publication/dispatch and the scenario-specific trusted TOPK capsule.
 
 ## Fixed scenario contract
 
@@ -293,12 +293,12 @@ comparison:
 
 Each public matrix row is one `case_id`; its eager and graph-replay coordinates use
 distinct coordinate IDs and modes while sharing that case ID, case set, input ID, and
-input SHA-256. Each coordinate declares five warmups and 30 ordered samples. D2b must
-apply the generic positive `ln(baseline/candidate)` effect, `math.fsum` mean, exponential
+input SHA-256. Each coordinate declares five warmups and 30 ordered samples. D2b1 applies
+the generic positive `ln(baseline/candidate)` effect, `math.fsum` mean, exponential
 latency ratio, `100 * expm1` improvement percentage, 4,096-replicate positional paired
 bootstrap, generic length-framed SHA-256 selection, R-7 95 percent interval, baseline
 log-MAD noise, inclusive coordinate verdicts, and evaluation-only aggregate exactly as
-specified in [Capsule comparison contract](design.md#capsule-comparison-contract-execution-deferred).
+specified in [Capsule comparison contract](design.md#capsule-comparison-contract-and-offline-comparison).
 The 500-basis-point protected-regression threshold is strict: a coordinate is protected
 only when both interval endpoints are strictly negative and its candidate median is more
 than 5 percent slower. A protected coordinate changes only a provisional aggregate
@@ -333,8 +333,9 @@ universal provider rankings.
 ### CAPSULE-001: narrow native capsule seam
 
 The fixed adapter, production `strixlab run capsule` orchestration, host fake, finalized
-snapshot loader, and D2a comparison contracts below are delivered. Step 4's comparison
-execution/report portion remains D2b; step 5 does not authorize a runnable TOPK manifest.
+snapshot loader, D2a comparison contracts, and D2b1 pure offline comparison below are
+delivered. Comparison evidence/CLI dispatch remains deferred; step 5 does not authorize a
+runnable TOPK manifest.
 
 1. Define one versioned subprocess contract for a trusted native executable
    with bounded `describe`, `correctness`, and `benchmark` operations and
@@ -347,9 +348,9 @@ execution/report portion remains D2b; step 5 does not authorize a runnable TOPK 
 3. Add a host-only fake capsule fixture that exercises success, correctness
    failure, malformed output, timeout, executable drift, and incomplete sample
    handling without ROCm or a GPU.
-4. D2a defines and authenticates the fixed lower-is-better paired contract. D2b will
-   load two arms, apply the closed normalization table, compute statistics/verdicts, and
-   publish derived evidence.
+4. D2a defines and authenticates the fixed lower-is-better paired contract. D2b1 loads
+   two arms, applies the closed normalization table, and returns canonical in-memory
+   statistics and verdicts. A later slice may publish derived evidence and dispatch it.
    Keep model-suite comparison behavior unchanged.
 5. Document and test the new manifest, evidence layout, CLI, and no-hardware
    verification path. No top-k manifest lands in this stage.

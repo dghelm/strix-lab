@@ -121,12 +121,15 @@ exactly and report exactly the declared number of positive finite ordered latenc
 plus nonnegative workspace bytes for each. Later requests and terminal results propagate
 the accepted scenario unchanged.
 
-### Capsule comparison contract (execution deferred)
+### Capsule comparison contract and offline comparison
 
 `paired-latency-log-bootstrap-v1` is scenario-neutral and lower-is-better. D2a defines
-and authenticates this contract but does not load two arms, normalize them for admission,
-compute statistics, issue verdicts, create derived evidence, or expose comparison CLI
-dispatch. Those execution steps remain D2b.
+and authenticates this contract. D2b1 adds the pure offline
+`compare_finalized_capsule_runs` boundary: it loads baseline then candidate, applies the
+closed admission projection, computes the directional statistics and verdicts, and returns
+a canonical in-memory report. It does not write evidence, allocate a run, publish a bundle,
+interpret TOPK payloads, or expose comparison CLI dispatch. Reversing the arms intentionally
+produces a different directional comparison; equal candidate IDs remain legal.
 
 For a coordinate with `n` positionally paired positive finite samples, the mathematical
 effect is `delta_i = ln(baseline_i / candidate_i)`, but implementations must evaluate it
@@ -194,13 +197,13 @@ is unchanged. Thus 500 basis points protects strictly more than 5 percent regres
 while exactly 5 percent is not protected. A null value disables only that additional
 guard.
 
-D2b must fail closed rather than publish a comparison whenever positional structure or
+D2b1 fails closed rather than return a comparison whenever positional structure or
 arm lengths diverge, or whenever any input or derived delta, `math.fsum`, mean, digest
 index, quantile interpolation, logarithm, exponential, `expm1`, median, ratio, MAD,
 threshold, or percentage is non-finite, overflows, or otherwise cannot be represented by
 the specified operation.
 
-Future D2b admission must use this closed field-path normalization table. A listed
+D2b1 admission uses this closed field-path normalization table. A listed
 difference is legal only when its exact token appears in the identical comparison
 contract on both arms; every unlisted semantic field remains byte-for-byte equal after
 strict authentication.
@@ -219,6 +222,13 @@ of an allowed exact field above and are removed from semantic equality rather th
 whitelisted by a provenance label. The scenario-contract SHA, comparison-contract SHA,
 machine-profile SHA, coordinate-structure SHA, ordered `(case_set, case_id, mode)` keys,
 and all other unaffected digests must remain equal.
+
+Admission uses explicit frozen projections with exact v1 field guards. Stable enclosing
+result input roles and paths, protocol/phase status, process outcome and capture semantics,
+stderr identity, correctness, and coordinate structure remain equal. Per-arm snapshot
+authentication establishes the accepted request/response echoes and chains; admission
+removes only their recomputed digests and stdout byte identities, process duration,
+benchmark latency/workspace inputs, and the already non-semantic opaque payload.
 
 Portable evidence is confined to `capsule/protocol/{describe,correctness,benchmark}/`:
 canonical `request.json`, a secret-free `process.json`, canonical `stdout.json` when
@@ -266,13 +276,14 @@ Failures before allocation raise `CapsuleRunError` and create no run. Any except
 allocation finalizes failure and raises `CapsuleExecutionError`, which exposes only the run
 ID, an optional finalized record, and one fixed safe message. Ordinary protocol failures
 remain structured failed results. CLI diagnostics use the ambient redaction context and do
-not relay child output, exception causes, or free-form failure text. The generic runner and
-finalized successful-capsule snapshot loader are available. The snapshot independently
+not relay child output, exception causes, or free-form failure text. The generic runner,
+finalized successful-capsule snapshot loader, and pure directional comparison library are
+available. The snapshot independently
 reauthenticates the scenario comparison contract against the manifest and exposes its
 canonical digest, permitted-difference tuple, and ordered `(case_set, case_id, mode)`
 alignment keys without deciding admission. The planned TOPK scenario remains inactive:
-there is no checked-in runnable capsule configuration, two-arm comparison execution, or
-TOPK payload interpretation.
+there is no checked-in runnable capsule configuration, comparison evidence/CLI dispatch,
+or TOPK payload interpretation.
 
 ## Future challenge boundary
 
