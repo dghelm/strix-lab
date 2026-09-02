@@ -36,6 +36,13 @@ build:
 contract:
   protocol: native-capsule-v1
   scenario_sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  comparison:
+    policy: paired-latency-log-bootstrap-v1
+    protected_regression_bps: 500
+    permitted_arm_differences:
+      - candidate-id
+      - source-candidate
+      - build-output
 timeouts:
   describe_seconds: 1.0
   correctness_seconds: 1.0

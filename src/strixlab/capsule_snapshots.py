@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 
 from strixlab.build_cache import CanonicalBuildRecordV1
 from strixlab.build_runtime import resolve_target_artifact
+from strixlab.capsule_contracts import CapsuleArmDifference, CapsuleComparisonContractV1
 from strixlab.capsule_runs import CapsuleResultV1
 from strixlab.capsules import (
     OPERATIONS,
@@ -94,6 +95,9 @@ class CapsuleAlignmentProjection:
     candidate: str
     scenario_sha256: str
     manifest_sha256: str
+    comparison: CapsuleComparisonContractV1
+    comparison_sha256: str
+    permitted_arm_differences: tuple[CapsuleArmDifference, ...]
     machine_id: str
     machine_profile_sha256: str
     source_id: str
@@ -105,6 +109,7 @@ class CapsuleAlignmentProjection:
     coordinate_ids: tuple[str, ...]
     training_coordinate_ids: tuple[str, ...]
     evaluation_coordinate_ids: tuple[str, ...]
+    coordinate_keys: tuple[tuple[Literal["training", "evaluation"], str, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,7 +425,8 @@ def _authenticate_protocol(
     benchmark = cast(BenchmarkResponseV1, phases[2].response)
     scenario_sha = _sha256(canonical_json_bytes(describe.scenario.model_dump(mode="json")))
     if (
-        phases[0].request.prior_response_sha256 is not None
+        describe.scenario.comparison != manifest.contract.comparison
+        or phases[0].request.prior_response_sha256 is not None
         or phases[0].request.scenario_contract_sha256 is not None
         or phases[0].request.scenario is not None
         or phases[1].request.prior_response_sha256 != phases[0].response_sha256
@@ -529,12 +535,17 @@ def _load(run_id: str, *, home: Path) -> FinalizedCapsuleSnapshot:
     structure_sha = _sha256(
         canonical_json_bytes([value.model_dump(mode="json") for value in coordinates])
     )
+    comparison = manifest.contract.comparison
+    comparison_sha = _sha256(canonical_json_bytes(comparison.model_dump(mode="json")))
     alignment = CapsuleAlignmentProjection(
         protocol=protocol.protocol,
         capsule_id=result.capsule_id,
         candidate=result.candidate,
         scenario_sha256=result.scenario_sha256,
         manifest_sha256=result.manifest_sha256,
+        comparison=comparison,
+        comparison_sha256=comparison_sha,
+        permitted_arm_differences=comparison.permitted_arm_differences,
         machine_id=result.machine_id,
         machine_profile_sha256=machine.profile_sha256,
         source_id=manifest.build.source_id,
@@ -546,6 +557,7 @@ def _load(run_id: str, *, home: Path) -> FinalizedCapsuleSnapshot:
         coordinate_ids=tuple(value.coordinate_id for value in coordinates),
         training_coordinate_ids=tuple(value.coordinate_id for value in training),
         evaluation_coordinate_ids=tuple(value.coordinate_id for value in evaluation),
+        coordinate_keys=tuple((value.case_set, value.case_id, value.mode) for value in coordinates),
     )
     return FinalizedCapsuleSnapshot(
         run_id=inspection.run_id,

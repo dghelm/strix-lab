@@ -157,6 +157,15 @@ def capsule_value() -> dict[str, Any]:
         "contract": {
             "protocol": "native-capsule-v1",
             "scenario_sha256": "b" * 64,
+            "comparison": {
+                "policy": "paired-latency-log-bootstrap-v1",
+                "protected_regression_bps": 500,
+                "permitted_arm_differences": [
+                    "candidate-id",
+                    "source-candidate",
+                    "build-output",
+                ],
+            },
         },
         "timeouts": {
             "describe_seconds": 30.0,

@@ -1,11 +1,10 @@
 # Planned ROCm 10 top-k scenario for gfx1151
 
-> **Status: planned; not runnable.** This is the durable design contract for a
-> future scenario. There is intentionally no manifest in `configs/suites/`:
-> suite manifest v1 and `strixlab run suite` cannot execute a standalone native
-> capsule. Do not create experiments against this contract until CAPSULE-001
-> and TOPK-001 below are implemented and the scenario lands as an executable,
-> versioned manifest.
+> **Status: planned; not runnable.** The generic native-capsule protocol, production
+> runner, finalized snapshot authentication, and closed comparison contract are
+> delivered. There is still intentionally no runnable top-k capsule manifest: D2b
+> comparison execution and TOPK-001 payload/provider semantics remain deferred. Do not
+> create experiments until the trusted TOPK capsule and versioned scenario manifest land.
 
 The planned scenario asks which one trusted top-k provider gives the best
 correct behavior on gfx1151 across small routing rows and long sparse-attention
@@ -16,10 +15,11 @@ shape.
 
 ## Current gap
 
-StrixLab can already bind a run to a machine profile, pinned source and build
-records, a resolved manifest digest, immutable evidence, a correctness-first
-schedule, portable bundles, and a conservative offline comparison. The current
-suite path cannot express this scenario:
+StrixLab can bind a run to a machine profile, pinned source and build records, a
+resolved manifest digest, immutable evidence, a correctness-first schedule, portable
+bundles, and a conservative model-suite comparison. It also has the generic capsule
+manifest/protocol/runner/snapshot boundary and the closed scenario-neutral capsule
+comparison contract. This top-k scenario is still inactive because:
 
 - `SuiteManifestV1` requires a model plus `test-backend-ops`, `llama-server`,
   and `llama-bench` cases.
@@ -27,14 +27,15 @@ suite path cannot express this scenario:
   model-bound suite results.
 - the comparison judge authenticates and compares those finalized model-suite
   results and their throughput samples.
-- there is no native capsule process contract, capsule result model, top-k
-  provider registry, or capsule comparison arm.
+- D2b two-arm capsule admission, statistics, verdict/report evidence, and CLI dispatch
+  are deferred;
+- there is no trusted top-k payload interpreter, provider implementation/registry,
+  correctness reference, or runnable capsule manifest.
 
-Forcing top-k through the llama-server adapter would obscure the operation
-boundary and invent model inputs that the capsule does not need. The missing
-seam is a narrow, versioned native-capsule runner that reuses the existing build,
-lock, evidence, record, bundle, and comparison primitives without introducing
-an adapter plugin ABI or generic workflow engine.
+Forcing top-k through the llama-server adapter would obscure the operation boundary and
+invent model inputs that the capsule does not need. The delivered capsule seam remains
+narrow and has no adapter plugin ABI or generic workflow engine; the missing work is the
+explicit deferred comparison executor and the scenario-specific trusted TOPK capsule.
 
 ## Fixed scenario contract
 
@@ -277,54 +278,63 @@ graph failure, non-finite timing, incomplete samples, executable drift, or an
 invalid machine observation fails the arm closed. Failed arms remain useful
 evidence but do not enter performance comparison.
 
-Comparison is local and offline between two distinct, finalized arms with
-identical scenario bytes, machine input, source/toolchain contract, case order,
-input digests, mode order, warmup count, and sample count. The baseline and
-candidate builds may differ only through the recorded provider selection or the
-one-provider patch under test.
+Comparison will be local and offline between two distinct authenticated finalized arms.
+This scenario instantiates the generic contract exactly as follows:
 
-The comparison policy ID is `topk-paired-log-bootstrap-v1`; it is a new
-lower-is-better projection and must not silently reuse the current suite
-throughput policy. For each case and mode, positionally pair the 30 samples and
-define `delta_i = ln(baseline_i / candidate_i)`. The reported log effect is the
-arithmetic mean of the 30 deltas and the latency ratio is its exponential, so a
-positive effect is an improvement and a negative effect is a regression.
+```yaml
+comparison:
+  policy: paired-latency-log-bootstrap-v1
+  protected_regression_bps: 500
+  permitted_arm_differences:
+    - candidate-id
+    - source-candidate
+    - build-output
+```
 
-Compute a deterministic 4,096-replicate paired bootstrap. Each replicate draws
-30 delta indices with replacement. Use `source_identity.length_frame` with
-domain `strixlab.topk.bootstrap.v1` and these labeled byte fields in order:
-`baseline_record_sha256` (ASCII record identity), `candidate_record_sha256`
-(ASCII record identity), `case_id` (UTF-8), `mode` (UTF-8), `replicate`
-(unsigned 64-bit big-endian), and `draw` (unsigned 64-bit big-endian). The first
-eight bytes of that frame's SHA-256, interpreted as an unsigned big-endian
-integer modulo 30, select the paired index. The 95% interval uses R-7
-linear-interpolation percentiles at `0.025` and `0.975` over the sorted
-replicate means.
+Each public matrix row is one `case_id`; its eager and graph-replay coordinates use
+distinct coordinate IDs and modes while sharing that case ID, case set, input ID, and
+input SHA-256. Each coordinate declares five warmups and 30 ordered samples. D2b must
+apply the generic positive `ln(baseline/candidate)` effect, `math.fsum` mean, exponential
+latency ratio, `100 * expm1` improvement percentage, 4,096-replicate positional paired
+bootstrap, generic length-framed SHA-256 selection, R-7 95 percent interval, baseline
+log-MAD noise, inclusive coordinate verdicts, and evaluation-only aggregate exactly as
+specified in [Capsule comparison contract](design.md#capsule-comparison-contract-execution-deferred).
+The 500-basis-point protected-regression threshold is strict: a coordinate is protected
+only when both interval endpoints are strictly negative and its candidate median is more
+than 5 percent slower. A protected coordinate changes only a provisional aggregate
+improvement to mixed; exactly 5 percent and every other provisional aggregate are
+unchanged. Workspace remains report-only.
 
-The baseline noise floor is
-`1.4826 * median(abs(log(baseline_i) - median(log(baseline))))`. A case/mode is
-`inconclusive` if its interval includes zero or the absolute mean log effect is
-no greater than that noise floor; otherwise it is `improvement` when both
-interval endpoints are positive and `regression` when both are negative.
-Report latency ratio and improvement percent as
-`100 * expm1(mean_log_effect)`, so positive percentages are improvements and
-negative percentages are regressions. Also report the interval, workspace
-delta, and raw arm summaries for every case; never collapse the matrix to a
-universal score.
+All three permitted differences are required because this scenario supports both a
+provider ID selected inside an otherwise identical arm and a reviewed one-provider
+source patch with its authenticated build output. `candidate-id` covers only the exact
+candidate fields. `source-candidate` covers only the candidate-derived source reproducer
+and nested source-evidence fields enumerated by the generic closed table; source ID,
+commit, locator, base commit, branch hint, adapter, and submodule policy/evidence remain
+equal. `build-output` covers only the derived recipe/build/attempt identities, existing
+targets' content identities, inspections, capture tools, CMake/compile digests, canonical
+record digest, and selected executable digest enumerated there. Profile, toolchain,
+canonical environment, requested targets, selections, tools, and target topology remain
+equal. Arm-local record, manifest, evidence, request/response, build-record, and
+executable digests are independently authenticated and normalized only as derived
+consequences of those exact semantic differences—not under a broad provenance label.
 
-Training cases are diagnostic. The conservative overall verdict uses every
-public evaluation case and both modes: all `improvement` produces
-`improvement`, all `regression` produces `regression`, all `inconclusive`
-produces `inconclusive`, and every mixture produces `mixed`. In addition, any
-public case/mode whose candidate median latency is more than 5% worse and whose
-interval excludes zero with both endpoints negative is a protected regression
-and prevents an overall `improvement`. Workspace growth is reported, not traded
-invisibly against latency. These remain provisional field comparisons, never
-official scores or universal provider rankings.
+The generic scenario envelope does not interpret TOPK data. The optional bounded opaque
+payload remains authenticated in each raw response and must carry the future TOPK-001
+provider, conformance, value/index correctness, setup, capture, first-call, throughput,
+and detailed workspace projections. It does not affect generic admission, equivalence,
+statistics, or verdicts until TOPK-001 supplies its separate strict interpreter. Training
+coordinates remain diagnostic; all public evaluation cases and both modes determine the
+future aggregate. These are provisional field comparisons, never official scores or
+universal provider rankings.
 
 ## Staged implementation sequence
 
 ### CAPSULE-001: narrow native capsule seam
+
+The fixed adapter, production `strixlab run capsule` orchestration, host fake, finalized
+snapshot loader, and D2a comparison contracts below are delivered. Step 4's comparison
+execution/report portion remains D2b; step 5 does not authorize a runnable TOPK manifest.
 
 1. Define one versioned subprocess contract for a trusted native executable
    with bounded `describe`, `correctness`, and `benchmark` operations and
@@ -337,8 +347,9 @@ official scores or universal provider rankings.
 3. Add a host-only fake capsule fixture that exercises success, correctness
    failure, malformed output, timeout, executable drift, and incomplete sample
    handling without ROCm or a GPU.
-4. Extend the offline comparison boundary only far enough to authenticate two
-   equivalent capsule arms and apply the fixed lower-is-better paired policy.
+4. D2a defines and authenticates the fixed lower-is-better paired contract. D2b will
+   load two arms, apply the closed normalization table, compute statistics/verdicts, and
+   publish derived evidence.
    Keep model-suite comparison behavior unchanged.
 5. Document and test the new manifest, evidence layout, CLI, and no-hardware
    verification path. No top-k manifest lands in this stage.

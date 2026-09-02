@@ -73,7 +73,12 @@ The frozen capsule manifest binds `id`, opaque dash-identifier `candidate`, `mac
 and an authoritative build requirement: `source_id`, exact 40-character
 `source_commit`, `toolchain_mode` (`host` or `rocm`), `gfx_target`, and executable
 `target`. No profile label substitutes for those leased-build coordinates. Its contract
-is exactly `native-capsule-v1` and pins `scenario_sha256`. Independent `describe`,
+is exactly `native-capsule-v1`, pins `scenario_sha256`, and carries the required frozen
+`CapsuleComparisonContractV1`. That comparison contract has the sole policy
+`paired-latency-log-bootstrap-v1`, a nullable strict integer
+`protected_regression_bps` from 0 through 10,000, and one of exactly two canonical
+`permitted_arm_differences` tuples: `("candidate-id",)` or
+`("candidate-id", "source-candidate", "build-output")`. Independent `describe`,
 `correctness`, and `benchmark` timeouts are finite, positive, and at most 3600 seconds.
 
 The adapter executes exactly three allowlisted child operations, in this order:
@@ -102,16 +107,118 @@ and retained only in raw response evidence. It is deliberately absent from the g
 terminal result and never participates in correctness, equivalence, statistics, or
 pass/fail; a later scenario-specific implementation such as `TOPK-001` may interpret it.
 
-`describe` returns the complete ordered scenario contract. Each zero-based, ordered,
-unique coordinate declares its exact coordinate ID, training/evaluation set, mode,
-input ID and SHA-256, warmup and sample counts, `latency-seconds`,
-`lower-is-better`, and `topk-paired-log-bootstrap-v1`. `correctness` must reproduce those
+`describe` returns the complete ordered scenario contract and must repeat the manifest's
+comparison contract exactly before the phase is accepted. Each zero-based ordered
+coordinate declares an exact coordinate ID, case ID, training/evaluation set, mode,
+input ID and SHA-256, warmup count, and sample count. Coordinate IDs and `(case_id,
+mode)` pairs are unique, at least one coordinate is evaluation, every sample count is at
+least five, and coordinates sharing a case ID must share their case set, input ID, and
+input digest. Metric, direction, and statistical policy are scenario-level contract
+facts rather than coordinate-local fields. `correctness` must reproduce the accepted
 coordinates exactly, without omission, duplication, or reordering, and every coordinate
 must pass before `benchmark` can start. `benchmark` must reproduce the same coordinates
 exactly and report exactly the declared number of positive finite ordered latency samples
-plus nonnegative workspace bytes for each. The typed terminal result preserves all of
-these generic comparison inputs without applying comparison or scenario-specific
-payload policy.
+plus nonnegative workspace bytes for each. Later requests and terminal results propagate
+the accepted scenario unchanged.
+
+### Capsule comparison contract (execution deferred)
+
+`paired-latency-log-bootstrap-v1` is scenario-neutral and lower-is-better. D2a defines
+and authenticates this contract but does not load two arms, normalize them for admission,
+compute statistics, issue verdicts, create derived evidence, or expose comparison CLI
+dispatch. Those execution steps remain D2b.
+
+For a coordinate with `n` positionally paired positive finite samples, the mathematical
+effect is `delta_i = ln(baseline_i / candidate_i)`, but implementations must evaluate it
+as `math.log(baseline_i) - math.log(candidate_i)` so the intermediate ratio cannot
+overflow. Positive delta means that the candidate is faster. The point estimate is
+`mean_log_effect = math.fsum(deltas) / n`; the geometric latency ratio is
+`math.exp(mean_log_effect)`, and improvement percent is
+`100 * math.expm1(mean_log_effect)`. Thus positive percentages are improvements and
+negative percentages are regressions. Workspace bytes are authenticated and reported
+per arm and as a delta, but never alter admission, intervals, noise, or verdicts.
+
+The interval is exactly 4,096 deterministic positional paired-bootstrap replicates.
+Each replicate makes `n` draws with replacement from the delta positions. For replicate
+`r` and draw `d`, compute SHA-256 over this exact call to
+`strixlab.source_identity.length_frame`:
+
+```python
+length_frame(
+    "strixlab.capsule.paired-latency-log-bootstrap.v1",
+    (
+        ("policy_id", b"paired-latency-log-bootstrap-v1"),
+        ("baseline_record_sha256", baseline_record_sha256.encode("ascii")),
+        ("candidate_record_sha256", candidate_record_sha256.encode("ascii")),
+        ("case_id", case_id.encode("utf-8")),
+        ("mode", mode.encode("utf-8")),
+        ("replicate", struct.pack(">Q", r)),
+        ("draw", struct.pack(">Q", d)),
+    ),
+)
+```
+
+The record values are the authenticated ASCII `record-sha256:` identities (that prefix
+followed by 64 lowercase hexadecimal characters), `r` is zero through 4,095, and `d` is
+zero through `n - 1`. `length_frame`
+contributes its fixed `b"strixlab-lf-v1\0"` prefix, UTF-8 domain preceded by its
+unsigned 32-bit big-endian byte length, unsigned 32-bit big-endian field count, then for
+each field in the shown order its ASCII label preceded by an unsigned 32-bit big-endian
+byte length and its value preceded by an unsigned 64-bit big-endian byte length. No
+comparison-contract digest, case set, or other input enters the seed. Interpret the first
+eight SHA-256 bytes as an unsigned big-endian integer modulo `n` to select the paired
+position. Replicate means also use `math.fsum / n`.
+
+For sorted zero-based values `x[0]` through `x[N - 1]`, the R-7 quantile at `p` uses
+`q = (N - 1) * p`. It returns `x[0]` when `q <= 0`, `x[N - 1]` when `q >= N - 1`, and
+otherwise sets `j = floor(q)` and `g = q - j` and returns
+`x[j] + g * (x[j + 1] - x[j])`. The 95 percent interval is this quantile at exactly
+`p = 0.025` and `p = 0.975` over the sorted 4,096 replicate means.
+
+Every median sorts its input first. For odd length `N`, it is `x[N // 2]`; for even
+length `N`, it is `math.fsum((x[N // 2 - 1], x[N // 2])) / 2`. Baseline noise is the
+log-MAD value `1.4826 * median(abs(log(baseline_i) - median(log(baseline))))`, using that
+median rule for both the baseline logs and their absolute deviations. The protected
+threshold uses the same rule on each arm's raw latency samples.
+
+A coordinate is inclusively `inconclusive` when `lower <= 0 <= upper` or
+`abs(mean_log_effect) <= baseline_log_mad`; otherwise it is `improvement` when both
+interval endpoints are strictly positive and `regression` when both are strictly
+negative. Only evaluation coordinates enter the provisional aggregate: all improvement,
+all regression, or all inconclusive preserves that verdict, while every other mixture is
+`mixed`. When `protected_regression_bps` is non-null, a coordinate is a protected
+regression only when both interval endpoints are strictly negative and
+`candidate_median / baseline_median > 1 + bps / 10_000`. A protected regression changes
+only a provisional aggregate `improvement` to `mixed`; every other provisional aggregate
+is unchanged. Thus 500 basis points protects strictly more than 5 percent regression,
+while exactly 5 percent is not protected. A null value disables only that additional
+guard.
+
+D2b must fail closed rather than publish a comparison whenever positional structure or
+arm lengths diverge, or whenever any input or derived delta, `math.fsum`, mean, digest
+index, quantile interpolation, logarithm, exponential, `expm1`, median, ratio, MAD,
+threshold, or percentage is non-finite, overflows, or otherwise cannot be represented by
+the specified operation.
+
+Future D2b admission must use this closed field-path normalization table. A listed
+difference is legal only when its exact token appears in the identical comparison
+contract on both arms; every unlisted semantic field remains byte-for-byte equal after
+strict authentication.
+
+| Difference token | Exact semantic field paths normalized arm-locally |
+|---|---|
+| `candidate-id` | `manifest.candidate`; `capsule/result.json.candidate`; `capsule/protocol/result.json.candidate`; and `candidate` in every accepted capsule protocol request and response. |
+| `source-candidate` | `capsule/build.json.canonical.source.{candidate_id,content_tree_id,snapshot_id,source_evidence_sha256,snapshot_manifest,diff,patches}` and only `capsule/build.json.canonical.source.source_evidence.{preparation_id,request_digest,patches,root_tree,content_tree_id,candidate_id,diff_file,diff_sha256,diff_size_bytes,status,created_at}` within the nested evidence object. `manifest.build.source_id`, `manifest.build.source_commit`, and nested `source_evidence.{source_id,source_locator,source_locator_sha256,base_commit,branch_hint,adapter,submodules_enabled,submodules}` are not normalized; locator, base source, adapter, and submodule policy/evidence remain equal. |
+| `build-output` | `capsule/build.json.{build_id,canonical_record_sha256}`; `capsule/build.json.canonical.{recipe_id,build_id,producer_attempt_id}`; `capsule/build.json.canonical.artifacts.{artifact_set_id,inspections,capture_tools,cmake_cache_sha256,compile_commands_sha256}`; `capsule/build.json.canonical.artifacts.targets[*].target_id`; `capsule/build.json.canonical.artifacts.artifacts[*].{mode,size_bytes,sha256}`; `capsule/result.json.{build_id,canonical_record_sha256,executable_sha256}`; `capsule/protocol/result.json.executable_sha256`; and `executable_sha256` in every accepted capsule protocol request and response. Target and artifact tuple cardinality/order and `targets[*].{schema_version,name,target_type,artifacts}` plus `artifacts[*].{schema_version,path,kind,elf_type,targets,runtime_dependency}` remain equal, preserving the target topology and associating changed content only with existing targets/paths. `profile_sha256`, toolchain mode, canonical environment, requested targets, selections, tools, and the manifest target remain equal. |
+
+Derived and authentication digests are never broad semantic-difference tokens. Each arm
+must independently authenticate its record SHA, manifest SHA, portable entry/blob SHA,
+input-snapshot SHA, result SHA, protocol-result SHA, request SHA, response SHA, canonical
+build-record SHA, and executable SHA. They may differ only as the recomputed consequence
+of an allowed exact field above and are removed from semantic equality rather than
+whitelisted by a provenance label. The scenario-contract SHA, comparison-contract SHA,
+machine-profile SHA, coordinate-structure SHA, ordered `(case_set, case_id, mode)` keys,
+and all other unaffected digests must remain equal.
 
 Portable evidence is confined to `capsule/protocol/{describe,correctness,benchmark}/`:
 canonical `request.json`, a secret-free `process.json`, canonical `stdout.json` when
@@ -159,10 +266,13 @@ Failures before allocation raise `CapsuleRunError` and create no run. Any except
 allocation finalizes failure and raises `CapsuleExecutionError`, which exposes only the run
 ID, an optional finalized record, and one fixed safe message. Ordinary protocol failures
 remain structured failed results. CLI diagnostics use the ambient redaction context and do
-not relay child output, exception causes, or free-form failure text. The generic runner is
-available, but the planned TOPK scenario remains inactive: there is no checked-in runnable
-capsule configuration, finalized capsule snapshot loader, comparison path, or TOPK payload
-interpretation.
+not relay child output, exception causes, or free-form failure text. The generic runner and
+finalized successful-capsule snapshot loader are available. The snapshot independently
+reauthenticates the scenario comparison contract against the manifest and exposes its
+canonical digest, permitted-difference tuple, and ordered `(case_set, case_id, mode)`
+alignment keys without deciding admission. The planned TOPK scenario remains inactive:
+there is no checked-in runnable capsule configuration, two-arm comparison execution, or
+TOPK payload interpretation.
 
 ## Future challenge boundary
 

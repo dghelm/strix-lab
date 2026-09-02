@@ -60,7 +60,19 @@ def _manifest(**build_updates: str) -> CapsuleManifestV1:
             "candidate": "candidate-a",
             "machine": "strix-halo-128g",
             "build": build,
-            "contract": {"protocol": "native-capsule-v1", "scenario_sha256": "b" * 64},
+            "contract": {
+                "protocol": "native-capsule-v1",
+                "scenario_sha256": "b" * 64,
+                "comparison": {
+                    "policy": "paired-latency-log-bootstrap-v1",
+                    "protected_regression_bps": 500,
+                    "permitted_arm_differences": [
+                        "candidate-id",
+                        "source-candidate",
+                        "build-output",
+                    ],
+                },
+            },
             "timeouts": {
                 "describe_seconds": 1.0,
                 "correctness_seconds": 1.0,

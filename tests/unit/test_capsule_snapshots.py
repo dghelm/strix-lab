@@ -120,12 +120,34 @@ def test_success_returns_complete_immutable_projection(successful: tuple[Path, A
     assert tuple(coordinate.coordinate_id for coordinate in value.evaluation_coordinates) == (
         "eval-reverse",
     )
-    assert value.latency_seconds_by_coordinate["train-forward"] == (0.01, 0.011, 0.012)
+    assert value.latency_seconds_by_coordinate["train-forward"] == (
+        0.01,
+        0.011,
+        0.012,
+        0.013,
+        0.014,
+    )
     assert value.workspace_bytes_by_coordinate == {
         "train-forward": 4096,
         "eval-reverse": 5120,
     }
     assert value.alignment.coordinate_ids == ("train-forward", "eval-reverse")
+    assert value.alignment.comparison == value.manifest.contract.comparison
+    assert (
+        value.alignment.comparison_sha256
+        == hashlib.sha256(
+            canonical_json_bytes(value.alignment.comparison.model_dump(mode="json"))
+        ).hexdigest()
+    )
+    assert value.alignment.permitted_arm_differences == (
+        "candidate-id",
+        "source-candidate",
+        "build-output",
+    )
+    assert value.alignment.coordinate_keys == (
+        ("training", "train-case", "forward"),
+        ("evaluation", "eval-case", "reverse"),
+    )
     assert "opaque_payload" not in value.__dataclass_fields__
     with pytest.raises(TypeError):
         value.workspace_bytes_by_coordinate["train-forward"] = 0  # type: ignore[index]
@@ -249,6 +271,19 @@ def test_manifest_build_source_toolchain_gfx_and_artifact_replay(
         with monkeypatch.context() as scoped:
             evidence.install(scoped)
             _assert_closed(lambda: load_finalized_capsule_snapshot(run.run_id, home=home))
+
+
+def test_scenario_comparison_must_match_manifest_comparison(
+    successful: tuple[Path, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, run = successful
+    evidence = _MemoryEvidence(run.run_id, home)
+    evidence.json(
+        "capsule/protocol/describe/stdout.json",
+        lambda value: value["scenario"]["comparison"].__setitem__("protected_regression_bps", 501),
+    )
+    evidence.install(monkeypatch)
+    _assert_closed(lambda: load_finalized_capsule_snapshot(run.run_id, home=home))
 
 
 @pytest.mark.parametrize("operation", ["describe", "correctness", "benchmark"])

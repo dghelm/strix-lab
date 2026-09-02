@@ -6,6 +6,7 @@ import os
 import shutil
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from strixlab.capsules import (
     CapsuleIntegrityError,
     CapsulePhaseResultV1,
     CapsuleProtocolResultV1,
+    CapsuleScenarioContractV1,
     run_capsule_protocol,
 )
 from strixlab.evidence import RunSession, begin_run, list_portable_entries
@@ -42,7 +44,19 @@ def _manifest(*, timeout: float = 1.0) -> CapsuleManifestV1:
                 "gfx_target": "gfx1151",
                 "target": "topk-capsule",
             },
-            "contract": {"protocol": "native-capsule-v1", "scenario_sha256": "b" * 64},
+            "contract": {
+                "protocol": "native-capsule-v1",
+                "scenario_sha256": "b" * 64,
+                "comparison": {
+                    "policy": "paired-latency-log-bootstrap-v1",
+                    "protected_regression_bps": 500,
+                    "permitted_arm_differences": [
+                        "candidate-id",
+                        "source-candidate",
+                        "build-output",
+                    ],
+                },
+            },
             "timeouts": {
                 "describe_seconds": timeout,
                 "correctness_seconds": timeout,
@@ -50,6 +64,78 @@ def _manifest(*, timeout: float = 1.0) -> CapsuleManifestV1:
             },
         }
     )
+
+
+def _scenario_value() -> dict[str, Any]:
+    coordinate = {
+        "case_id": "shared-case",
+        "case_set": "evaluation",
+        "input_id": "shared-input",
+        "input_sha256": "1" * 64,
+        "warmup_count": 1,
+        "sample_count": 5,
+    }
+    return {
+        "schema_version": 1,
+        "comparison": _manifest().contract.comparison.model_dump(mode="json"),
+        "coordinates": [
+            {**coordinate, "coordinate_id": "shared-eager", "mode": "eager", "order": 0},
+            {
+                **coordinate,
+                "coordinate_id": "shared-graph",
+                "mode": "graph-replay",
+                "order": 1,
+            },
+        ],
+    }
+
+
+def _validate_scenario(value: dict[str, Any]) -> CapsuleScenarioContractV1:
+    return CapsuleScenarioContractV1.model_validate(
+        {**value, "coordinates": tuple(value["coordinates"])}
+    )
+
+
+def test_scenario_contract_accepts_ordered_case_modes() -> None:
+    scenario = _validate_scenario(_scenario_value())
+    assert tuple(
+        (coordinate.case_set, coordinate.case_id, coordinate.mode)
+        for coordinate in scenario.coordinates
+    ) == (
+        ("evaluation", "shared-case", "eager"),
+        ("evaluation", "shared-case", "graph-replay"),
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["coordinates"][1].__setitem__("coordinate_id", "shared-eager"),
+        lambda value: value["coordinates"][1].__setitem__("mode", "eager"),
+        lambda value: [
+            coordinate.__setitem__("case_set", "training") for coordinate in value["coordinates"]
+        ],
+        lambda value: value["coordinates"][0].__setitem__("sample_count", 4),
+        lambda value: value["coordinates"][1].__setitem__("case_set", "training"),
+        lambda value: value["coordinates"][1].__setitem__("input_id", "other-input"),
+        lambda value: value["coordinates"][1].__setitem__("input_sha256", "2" * 64),
+        lambda value: value["coordinates"][0].pop("case_id"),
+        lambda value: value.pop("comparison"),
+    ],
+)
+def test_scenario_contract_rejects_incomplete_or_ambiguous_coordinates(mutate: Any) -> None:
+    value = deepcopy(_scenario_value())
+    mutate(value)
+    with pytest.raises(ValueError):
+        _validate_scenario(value)
+
+
+@pytest.mark.parametrize("field", ["metric", "direction", "policy"])
+def test_coordinate_local_comparison_fields_are_forbidden(field: str) -> None:
+    value = _scenario_value()
+    value["coordinates"][0][field] = "legacy-value"
+    with pytest.raises(ValueError):
+        _validate_scenario(value)
 
 
 def _copy_fake(tmp_path: Path) -> tuple[Path, str]:
@@ -142,7 +228,7 @@ def test_success_publishes_exact_ordered_chained_evidence(tmp_path: Path) -> Non
             "eval-reverse",
         ]
         assert result.benchmark is not None
-        assert result.benchmark[0].latency_seconds == (0.01, 0.011, 0.012)
+        assert result.benchmark[0].latency_seconds == (0.01, 0.011, 0.012, 0.013, 0.014)
         assert result.benchmark[0].workspace_bytes == 4096
         assert "opaque_payload" not in result.model_dump(mode="json")
         assert all(phase.process.category == "none" for phase in result.phases)
@@ -247,6 +333,7 @@ def test_correctness_failure_short_circuits_benchmark(tmp_path: Path) -> None:
         ("wrong-scenario-describe", "describe-response-invalid", "stdout.json"),
         ("wrong-manifest-describe", "describe-response-invalid", "stdout.json"),
         ("wrong-executable-describe", "describe-response-invalid", "stdout.json"),
+        ("wrong-comparison-describe", "describe-response-invalid", "stdout.json"),
         ("nonzero-describe", "describe-process-failed", "stdout.json"),
     ],
 )

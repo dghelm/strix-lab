@@ -23,6 +23,7 @@ from pydantic import (
     model_validator,
 )
 
+from strixlab.capsule_contracts import CapsuleComparisonContractV1
 from strixlab.config import iter_environment_references, resolve_environment
 from strixlab.naming import ENV_NAME_PATTERN
 from strixlab.secret_policy import reject_sensitive_interpolations
@@ -968,6 +969,7 @@ class CapsuleContractV1(_CapsuleManifestModel):
 
     protocol: Literal["native-capsule-v1"]
     scenario_sha256: Sha256Lower
+    comparison: CapsuleComparisonContractV1
 
 
 class CapsuleTimeoutsV1(_CapsuleManifestModel):

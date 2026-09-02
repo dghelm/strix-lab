@@ -64,6 +64,13 @@ def test_capsule_manifest_binds_authoritative_build_and_machine(
     assert manifest.build.gfx_target == "gfx1151"
     assert manifest.build.target == "topk-capsule"
     assert manifest.contract.protocol == "native-capsule-v1"
+    assert manifest.contract.comparison.policy == "paired-latency-log-bootstrap-v1"
+    assert manifest.contract.comparison.protected_regression_bps == 500
+    assert manifest.contract.comparison.permitted_arm_differences == (
+        "candidate-id",
+        "source-candidate",
+        "build-output",
+    )
 
 
 def test_capsule_manifest_tree_is_frozen(capsule_value: dict[str, Any]) -> None:
@@ -73,6 +80,8 @@ def test_capsule_manifest_tree_is_frozen(capsule_value: dict[str, Any]) -> None:
         manifest.machine = "other-machine"
     with pytest.raises(ValidationError, match="frozen"):
         manifest.build.target = "other-target"
+    with pytest.raises(ValidationError, match="frozen"):
+        manifest.contract.comparison.protected_regression_bps = None
 
 
 @pytest.mark.parametrize(
@@ -85,6 +94,11 @@ def test_capsule_manifest_tree_is_frozen(capsule_value: dict[str, Any]) -> None:
         lambda value: value["build"].pop("gfx_target"),
         lambda value: value["build"].pop("target"),
         lambda value: value["build"].update(profile="untrusted-label"),
+        lambda value: value["contract"].pop("comparison"),
+        lambda value: value["contract"]["comparison"].update(policy="other-policy"),
+        lambda value: value["contract"]["comparison"].update(
+            permitted_arm_differences=["candidate-id", "build-output"]
+        ),
     ],
 )
 def test_capsule_manifest_rejects_incomplete_or_profile_label_build_identity(
