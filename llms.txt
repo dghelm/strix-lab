@@ -29,33 +29,37 @@ candidate runs, not the screening evidence. Calibration is two distinct
 baseline/baseline no-op suites, not a candidate comparison. Keep failed,
 negative, inconclusive, and interrupted findings.
 
-Interrupted phases stay spent: resume never replays unknown running work;
-further attempts require a new campaign. `max_suite_runs` is a count budget
-that includes calibration, screening, confirmation, failures, and interrupted
-reservations. It is an admission check, not a wall-clock deadline.
+Interrupted phases stay spent and terminal: resume never auto-retries that
+phase. `max_suite_runs` is a count budget that includes calibration, per-
+candidate screening, confirmation of screening winners, failures, and
+interrupted whole-phase reservations. It is an admission check, not a wall-
+clock deadline. Cost is 2 calibration runs + 4 AB/BA screen runs per
+candidate + 4 fresh AB/BA confirmation runs per screening winner.
 
-v1 commands (controller surface; README examples wait on the checked-in CLI):
+v1 commands (controller surface; README examples wait on the checked-in CLI;
+ask core before inventing extra options):
 
 ```bash
-uv run strixlab campaign create path/to/plan.yaml
-uv run strixlab campaign inspect "$CAMPAIGN_ID"
-uv run strixlab campaign report "$CAMPAIGN_ID"
-uv run strixlab campaign resume "$CAMPAIGN_ID"
+uv run strixlab campaign create PLAN.yaml
+uv run strixlab campaign inspect ID
+uv run strixlab campaign report ID
+uv run strixlab campaign resume ID
 ```
 
-`create` freezes the plan and does not run suites. `resume` evaluates remaining
-phases and is hardware work for later; do not run GPU campaigns, download
-models, or provision ROCm as part of scaffold documentation. `inspect` prints
-canonical JSON state from `<home>/campaigns/<id>/state.json`. `report` renders
-Markdown from that verified state. There is no exploration-versus-confirmation
-flag, no automatic upstream push, and no ROCm 10 prerequisite.
+`create` freezes a conservative fixed patch list and does not run suites.
+`resume` evaluates remaining phases and is hardware work for later; do not
+run GPU campaigns, download models, or provision ROCm as part of scaffold
+documentation. `inspect` prints canonical JSON state from
+`<home>/campaigns/<id>/state.json`. `report` renders Markdown from that
+verified state so an external agent can propose the next campaign; the
+controller does not auto-start one. There is no exploration-versus-
+confirmation flag, no automatic upstream push, and no ROCm 10 prerequisite.
 
-Preserve the raw judge verdict, including `mixed`. A campaign
-`objective_met_provisional` label is not judge improvement and not
-`best-known`. Do not invent extra campaign flags, treat mixed or inconclusive
-as a win, reuse screening runs as confirmation, retry a spent interrupted
-attempt in place, relax `objective_cases` or the protected-regression margin
-after screening, or open a pull request because a candidate was retained.
+Conservative retain bar: both screening comparisons and both confirmation
+comparisons must all-case improve, and cross-arm greedy token digests and
+counts must match on each. Do not treat mixed or inconclusive as a win, reuse
+screening runs as confirmation, retry a spent interrupted phase, or open a
+pull request because a candidate was retained.
 
 ## Planned scenarios
 

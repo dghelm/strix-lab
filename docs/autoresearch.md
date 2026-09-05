@@ -60,8 +60,9 @@ reject decision.
    calibration suites as confirmation evidence.
 6. **Retain or reject** — keep the finding, including correctness failures,
    regressions, mixed results, inconclusive comparisons, and spent
-   interrupted attempts. Then stop or hand the next hypothesis to a **new**
-   campaign.
+   interrupted attempts. The controller does not invent the next hypothesis.
+   An external agent reads `campaign report` and may propose a **new**
+   campaign from that report.
 
 Profiled runs remain diagnostics. Confirmation uses clean equivalent arms, as
 the foundation design already requires.
@@ -79,34 +80,30 @@ Acceptance is conservative and campaign-local:
   other, not to a candidate. The campaign fails closed unless they compare
   `inconclusive` and pass the campaign-only cross-arm greedy token-parity
   gate. Failed calibration does not yield a permissive campaign.
-- Screening and confirmation each use whole-suite AB then BA order (four
-  suite runs per phase). Confirmation is a fresh independent pair of
-  baseline and candidate suites. That order balances arms; it is not
-  temporally paired sampling and is not a campaign-level confidence
-  interval.
-- Authenticated per-prompt token digests and counts must match across
-  baseline and candidate on every comparison, including calibration. Token
-  mismatch is preserved as correctness-negative evidence, never as
+- Screening and confirmation each use whole-suite AB then BA order. Cost is
+  **2** baseline/baseline calibration runs once, then **4** screening runs
+  per candidate, then **4** fresh confirmation runs only for screening
+  winners. Confirmation is a new independent baseline and candidate pair.
+  AB/BA balances whole-suite order; it is not temporally paired sampling
+  and is not a campaign-level confidence interval.
+- Authenticated per-prompt greedy token digests and counts must match
+  across baseline and candidate on every comparison, including calibration.
+  Token mismatch is preserved as correctness-negative evidence, never as
   improvement.
-- The existing judge is unchanged. Its overall verdict may remain `mixed`.
-  The campaign does not rewrite that verdict into improvement or
-  `best-known`.
-- A frozen campaign objective is declared separately. `objective_cases` is
-  an optional nonempty unique subset of the suite's performance case IDs
-  (omission means all of them). Every objective case must already have
-  judge verdict `improvement`. Every remaining case is automatically
-  protected and must satisfy `percent_ci_low >=
-  -protected_regression_margin_percent`. The margin is at least 0 and
-  less than 100, default 0. Both screening comparisons and both fresh
-  confirmations must pass these gates.
-- When those gates pass, the campaign label is `objective_met_provisional`.
-  Per-case intervals are not simultaneous or campaign-level confidence, and
-  the protected-case bound is not a formal noninferiority proof.
-- Failed, interrupted, and budget-exhausted attempts stay spent. A resume
-  that finds a `running` phase marks it `interrupted` with its reserved
-  suite slots consumed and **does not replay** that work. Further attempts
-  require a new campaign. Resume also does not replay a completed phase or
-  confirm twice.
+- Conservative v1 retain bar: **both** screening comparisons **and both**
+  confirmation comparisons must all-case improve under the existing judge,
+  and the cross-arm greedy digest/count gate must pass on each of those
+  comparisons. A mixed or inconclusive overall verdict is not a retain
+  decision. The campaign does not rewrite the judge into `best-known`.
+- The plan may still freeze optional `objective_cases` (omission means all
+  performance cases) and `protected_regression_margin_percent` (default
+  `0`). Until core confirms a narrower frozen objective, document and treat
+  the coordinator bar as all-case improvement on every required comparison.
+- Whole-phase reservation happens before any suite work: 2 slots for
+  calibration, 4 for screening, 4 for confirmation. An interrupted phase is
+  spent and terminal and is **not** auto-retried. Remaining unstarted
+  candidates may continue only without replaying that spent phase. Failed
+  and budget-exhausted reservations stay spent.
 
 The `ggml/src` patch allowlist is a v1 scope guard: campaigns patch source
 files under that tree and do not edit build, test, inspector, or evaluator
@@ -114,30 +111,27 @@ files. It is not a sandbox against dishonest executable output.
 
 ## Commands
 
-`create` freezes a reviewed plan and does not run suites. `resume` evaluates
-the finite remainder. `inspect` prints canonical JSON state. `report` renders
-Markdown from that verified state for the next separately reviewed campaign.
-State is persisted under the resolved StrixLab home as
-`campaigns/<id>/state.json` with frozen input copies beside it. Exploration
-versus confirmation is phase-internal — there is no extra flag that turns a
-screen into a confirmation. README command examples wait on the checked-in
-CLI; the controller surface is:
+v1 is a conservative fixed reviewed patch list. `create PLAN.yaml` freezes
+that list and does not run suites. `resume ID` evaluates the finite remainder.
+`inspect ID` prints canonical JSON state. `report ID` renders Markdown from
+that verified state so an **external agent** can propose the next campaign;
+the controller does not auto-start one. State is persisted under the resolved
+StrixLab home as `campaigns/<id>/state.json` with frozen input copies beside
+it. Exploration versus confirmation is phase-internal — there is no extra
+flag that turns a screen into a confirmation. README command examples wait on
+the checked-in CLI. Exact flags remain owned by core; the proposed surface
+is:
 
 ```bash
-uv run strixlab campaign create path/to/plan.yaml
-# copy the campaign identifier from the printed JSON state
-
-uv run strixlab campaign inspect "$CAMPAIGN_ID"
-uv run strixlab campaign report "$CAMPAIGN_ID"
-
-# Hardware evaluation is later. resume continues remaining phases against the
-# frozen evaluator; it is not a copy-paste experiment to run during scaffold
-# work, and it never pushes upstream.
-uv run strixlab campaign resume "$CAMPAIGN_ID"
+uv run strixlab campaign create PLAN.yaml
+uv run strixlab campaign inspect ID
+uv run strixlab campaign report ID
+# Hardware evaluation is later; resume is not a scaffold-time experiment.
+uv run strixlab campaign resume ID
 ```
 
-Each command accepts optional `--home PATH`, matching the rest of the CLI.
 Do not invent additional flags, a "latest campaign" alias, or a hosted API.
+Ask core for exact options such as `--home` before treating them as frozen.
 
 ### Plan schema (v1)
 
@@ -163,11 +157,12 @@ ordered patch identities against the frozen base. Resume refuses evaluator
 drift. Exhausted `max_suite_runs` stops with an explicit reason **before**
 preparing source. Do not describe that count as a hard wall-clock deadline.
 
-A successful candidate that reaches confirmation costs two calibration suite
-runs plus four screening runs plus four confirmation runs; failed and
-interrupted reservations still consume their reserved slots. Do not claim
-statistical confidence from that budget. Core owns the schema-valid harness
-fixture [`configs/campaigns/historical-mmvq-demo.yaml`](../configs/campaigns/historical-mmvq-demo.yaml)
+Suite-run cost is 2 calibration runs for the campaign, plus 4 AB/BA screening
+runs per candidate, plus 4 fresh AB/BA confirmation runs per screening
+winner. Failed and interrupted whole-phase reservations still consume their
+reserved slots. Do not claim statistical confidence from that budget. Core
+owns the schema-valid harness fixture
+[`configs/campaigns/historical-mmvq-demo.yaml`](../configs/campaigns/historical-mmvq-demo.yaml)
 when it lands: it is an existing historical regression used as a **harness
 demo only**, not a suggested promising optimization. `create` can freeze on
 CPU; `resume` on hardware is separately authorized and later.
@@ -177,20 +172,22 @@ CPU; `resume` on hardware is separately authorized and later.
 Work is staged so the controller and the problem list can land without
 pretending hardware results exist.
 
-1. **Core controller** — freeze-only `campaign create`, bounded `campaign
-   resume`, JSON `campaign inspect`, Markdown `campaign report`. Durable
-   phase reservation before side effects; interrupted or unknown outcomes
-   stay spent and are never replayed; next campaign is a new plan. Count
-   budgets include calibration, confirmation, failures, and interruptions.
+1. **Core controller** — freeze-only `campaign create PLAN.yaml`, bounded
+   `campaign resume ID`, JSON `campaign inspect ID`, Markdown `campaign
+   report ID`. Whole-phase reservation before side effects; interrupted
+   phases stay spent and terminal and are not auto-retried. An external
+   agent proposes the next campaign from the report. Count budgets include
+   2 calibration runs, 4 screening runs per candidate, 4 confirmation runs
+   per screening winner, failures, and interruptions.
 2. **Problem portfolio** — [`research-problems.md`](research-problems.md)
    ranks bounded hypotheses and the post-merge pilot, separating v1 patch
    campaigns from configuration tuning and blocked workloads. Docs only; no
    structured catalog.
 3. **Reviewer / verification** — independent review of campaign evidence.
-   Existing `compare` stays unchanged. Campaign-only cross-arm token parity
-   and the frozen objective/protected-regression gates are extra acceptance
-   rules; the campaign label `objective_met_provisional` does not rewrite
-   the judge. Failed and inconclusive findings remain in the campaign state.
+   Existing `compare` stays unchanged. Conservative retain requires both
+   screening comparisons and both confirmation comparisons to all-case
+   improve, plus cross-arm greedy digest/count match. Failed and
+   inconclusive findings remain in the campaign state.
 4. **Later hardware experiments** — after the scaffold is reviewable, follow
    the post-merge pilot in the problem portfolio: calibrate, profile a
    baseline, try one-mechanism patch candidates, then confirm. ROCm 10,

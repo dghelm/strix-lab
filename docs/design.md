@@ -1308,27 +1308,27 @@ exploration only. Confirmation uses new baseline and candidate runs, never
 screening evidence. Failed, negative, inconclusive, and interrupted findings
 are retained. The existing `compare` contract is unchanged; campaigns add a
 campaign-only cross-arm greedy token-parity gate before treating a comparison
-as correctness-preserving acceptance. The raw overall judge verdict is
-preserved, including `mixed`. A campaign may separately label
-`objective_met_provisional` when every frozen objective case has verdict
-`improvement` and every remaining protected case satisfies `percent_ci_low >=
--protected_regression_margin_percent` on both screening comparisons and both
-fresh confirmations. That label is not judge improvement and not `best-known`.
+as correctness-preserving acceptance. Conservative v1 retain requires **both**
+screening comparisons **and both** confirmation comparisons to all-case
+improve, with matching cross-arm greedy token digests and counts on each.
+A mixed or inconclusive overall verdict is not a retain decision and is not
+`best-known`. The controller does not auto-start the next campaign; an
+external agent proposes a new plan from `campaign report`.
 
-Resume that finds a `running` phase marks it `interrupted` with slots spent
-and does not replay it. Further work is a new campaign. The evaluator (resolved
-manifests, patch bytes, package digest, and judge policy) is frozen at create
-and rechecked on every admission and resume; drift fails closed.
+A whole phase is reserved before suite work. An interrupted phase is spent
+and terminal and is not auto-retried. The evaluator (resolved manifests,
+patch bytes, package digest, and judge policy) is frozen at create and
+rechecked on every admission and resume; drift fails closed.
 
 ### v1 command surface
 
-`strixlab campaign create PLAN.yaml [--home PATH]` validates and freezes the
-plan without running suites. `strixlab campaign resume CAMPAIGN_ID [--home
-PATH]` evaluates the finite remainder. `strixlab campaign inspect CAMPAIGN_ID
-[--home PATH]` prints canonical JSON state. `strixlab campaign report
-CAMPAIGN_ID [--home PATH]` renders Markdown from that verified state. There is
-no flag that collapses screening into confirmation. README command examples
-wait on the checked-in CLI.
+Proposed surface, pending core's exact options: `campaign create PLAN.yaml`,
+`campaign resume ID`, `campaign inspect ID`, `campaign report ID`. `create`
+validates and freezes a conservative fixed patch list without running suites.
+`resume` evaluates the finite remainder. `inspect` prints canonical JSON
+state. `report` renders Markdown so an external agent can propose the next
+campaign. There is no flag that collapses screening into confirmation. README
+command examples wait on the checked-in CLI.
 
 Plan fields are `schema_version` (literal `1`), dash-id `id`, relative paths
 `suite`, `machine`, `source`, `build`, and `model`, a `candidates` list of
@@ -1349,25 +1349,26 @@ source preparation. Commands emit canonical JSON; durable state lives at
 
 Calibration is two distinct no-op **baseline/baseline** suites and must
 compare `inconclusive` with cross-arm token parity; a failed calibration does
-not yield a permissive campaign. Screening and confirmation each run
-whole-suite AB then BA (four suite runs per phase) with confirmation using a
-fresh independent baseline and candidate. A successful candidate that reaches
-confirmation therefore costs ten suite runs including calibration. AB/BA
-balances whole-suite order; it is not temporally paired sampling and is not a
-campaign-level confidence claim.
+not yield a permissive campaign. Screening costs four whole-suite AB/BA runs
+per candidate. Confirmation of a screening winner costs four fresh independent
+AB/BA runs. Shared calibration is two runs. Whole-phase reservation precedes
+that work. AB/BA balances whole-suite order; it is not temporally paired
+sampling and is not a campaign-level confidence claim.
 
 ### Implementation plan
 
-1. **Core controller** — freeze, resume remaining phases, inspect JSON,
-   report Markdown. Durable reservation before side effects; interrupted
-   attempts stay spent and are never replayed.
+1. **Core controller** — `create PLAN.yaml`, `resume ID`, `inspect ID`,
+   `report ID`. Whole-phase reservation before side effects; interrupted
+   phases stay spent and terminal and are not auto-retried. An external
+   agent proposes the next campaign from the report.
 2. **Problem portfolio** — [research-problems.md](research-problems.md)
    ranks bounded hypotheses and the post-merge pilot, separating v1 patch
    campaigns from configuration tuning and blocked workloads. Docs only; no
    structured catalog.
-3. **Reviewer / verification** — independent review of campaign evidence,
-   existing judge plus the campaign-only token-parity gate, preservation of
-   negative findings.
+3. **Reviewer / verification** — independent review of campaign evidence.
+   Both screening comparisons and both confirmation comparisons must
+   all-case improve with matching cross-arm greedy digests and counts.
+   Preserve negative and interrupted findings.
 4. **Later hardware experiments** — calibrate, profile a baseline, try
    one-mechanism patch candidates, confirm. Not part of the scaffold landing.
 

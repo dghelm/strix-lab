@@ -42,12 +42,15 @@ A clean checkout provides a strict, evidence-oriented CLI:
 
 A campaign is a local, finite investigation of reviewed source patches against
 one strict frozen evaluator (suite, machine, source, build, model, and
-comparison policy). The controller freezes a plan, screens candidates, and
-requires a fresh independent confirmation before retain or reject. Calibration
-is two distinct baseline/baseline runs. Interrupted attempts stay spent. The
-suite-run budget counts calibration, confirmation, failures, and interruptions
-and is not a wall-clock deadline. Failed and inconclusive findings stay in the
-record. Campaigns do not replace the evidence CLI, do not open upstream pull
+comparison policy). The controller freezes a conservative fixed patch list, screens candidates,
+and requires a fresh independent confirmation before retain or reject.
+Calibration is two distinct baseline/baseline runs. Screening costs four AB/BA
+runs per candidate; confirmation of a screening winner costs four more.
+Interrupted phases stay spent and are not auto-retried. The suite-run budget
+counts calibration, confirmation, failures, and interruptions and is not a
+wall-clock deadline. An external agent may propose the next campaign from
+`campaign report`. Failed and inconclusive findings stay in the record.
+Campaigns do not replace the evidence CLI, do not open upstream pull
 requests, and do not require ROCm 10.
 
 See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure, frozen
