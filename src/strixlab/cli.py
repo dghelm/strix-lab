@@ -22,6 +22,7 @@ from strixlab.builds import (
     inspect_recipe,
 )
 from strixlab.bundles import BundleError, export_bundle, verify_bundle
+from strixlab.campaign_cli import campaign_app
 from strixlab.capsule_runs import (
     CapsuleExecutionError,
     CapsuleRunError,
@@ -97,6 +98,7 @@ app.add_typer(build_app, name="build")
 app.add_typer(run_app, name="run")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(model_app, name="model")
+app.add_typer(campaign_app, name="campaign")
 
 _EVIDENCE_DOMAIN_ERRORS = (OSError, ValueError, RunError, RecordError, BundleError)
 _MODEL_DOMAIN_ERRORS = (OSError, ValueError, ModelError, SourceError, GitBoundaryError)

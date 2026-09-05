@@ -25,6 +25,14 @@ documentation; the handoff remains ignored reference material.
 8. Imported challenge and candidate artifacts are data. Parsing is pure;
    environment resolution is an explicit trusted operation followed by full
    validation of the resolved result.
+9. Profile-guided campaigns freeze the evaluator before patches. Screening
+   and confirmation are separate phases. Calibration is distinct
+   baseline/baseline evidence. An interrupted candidate stays spent while
+   untouched candidates may continue; interrupted calibration stops. Count
+   budgets include calibration, confirmation, failures, and interruptions
+   and are not wall-clock deadlines. The raw judge verdict is preserved;
+   `objective_met_provisional` is campaign-local. A retain decision is never
+   an upstream push.
 
 ### Local storage trust boundary
 
@@ -297,6 +305,16 @@ the subprocess timeout contract is not a security sandbox for untrusted GPU code
 Challenge support begins only after immutable evidence, comparison judging, and
 the capsule process contract exist. The foundation merely keeps manifest and CLI
 registries extensible so later challenge kinds do not require restructuring.
+
+Local profile-guided campaigns are a different layer: they reuse the existing
+suite and comparison judge against a frozen evaluator and a finite reviewed
+patch list. They are not hosted challenges, official scores, or an upstream
+patch bot. The procedure, v1 commands, and staged implementation plan are in
+[Bounded profile-guided campaigns](autoresearch.md). Ranked, bounded
+hypotheses and the smallest honest post-merge pilot are in
+[Profile-guided llama.cpp research problems](research-problems.md). That
+portfolio is docs-only, not an experiment catalog, and separates v1 patch
+campaigns from configuration tuning and blocked workloads.
 
 For the pilot, GitHub is the collaboration and catalog boundary—not an execution
 service. Existing suite manifests are called **scenarios**. A **candidate** is a
@@ -1276,6 +1294,89 @@ but it does **not** copy either arm's evidence tree. A comparison bundle is ther
 portable *derived* report, not a standalone proof of its arms: to verify the arms offline,
 export the two source-run bundles as well. The judge reuses the existing bundle system rather
 than building a second bundler.
+
+## Bounded profile-guided campaigns
+
+Campaigns are the next local layer above the smoke suite and offline judge. A
+campaign freezes one source, build, machine, model, suite, and judge policy,
+then evaluates a finite reviewed patch list. It does not download models,
+provision ROCm, interpret TOPK payloads, or push upstream. ROCm 10 is not a
+prerequisite.
+
+The procedure is hypothesis → fixed evaluator → patch → screen → fresh
+confirmation → retain/reject. Next campaign is a new reviewed plan informed by
+`campaign report`; old campaigns are never rewritten. Failed, negative,
+inconclusive, and interrupted findings are retained. The existing `compare`
+contract is unchanged. Campaigns add cross-arm greedy token parity (v1 is
+launch/layout-preserving only) and a frozen objective/protected-regression
+gate. Optional `objective_cases` defaults to all performance cases; every
+objective must have existing `improvement`; every remaining case is
+automatically protected with `percent_ci_low >=
+-protected_regression_margin_percent` (default `0`, finite `0 <= m < 100`).
+Both screening AB/BA comparisons and both fresh confirmation AB/BA
+comparisons must pass those gates plus token parity. The raw judge verdict
+stays as-is, including `mixed`. The campaign label is
+`objective_met_provisional`, not judge improvement and not `best-known`.
+Per-case intervals are not simultaneous or campaign-level confidence, and
+the protected-case bound is not a formal noninferiority proof. Calibration
+is unchanged.
+
+A whole phase is reserved before suite work. Reserved slots stay spent on
+failure, crash, or interruption. An interrupted candidate is spent and
+terminal; resume continues untouched candidates and does not replay it.
+Interrupted calibration stops the campaign. Some lower-layer failures never
+return an authenticatable run ID; the phase records that a failure-evidence
+link is unavailable rather than claiming every failure is linked. The
+evaluator is frozen at create and rechecked on resume; drift fails closed.
+There is no campaign JSON Schema registration; `create` uses a strict
+`CampaignPlanV1` parser.
+
+### v1 command surface
+
+`strixlab campaign create PLAN.yaml [--home PATH]` freezes a plan and prints
+canonical JSON; it does not run suites. `strixlab campaign resume ID [--home
+PATH]` evaluates the finite remainder on hardware and prints JSON.
+`strixlab campaign inspect ID [--home PATH]` re-validates evidence links and
+prints JSON. `strixlab campaign report ID [--home PATH]` prints Markdown from
+that verified state. There are no phase-separating flags.
+
+Required plan fields: `schema_version` `1`, dash-id `id`, relative paths
+`suite`, `machine`, `source`, `build`, `model`, `candidates` as `{id,
+patches}` (ids unique and not `baseline`), `max_candidates` (`>=` list
+length, `<= 100`), and `max_suite_runs` (`>= 0`, `<= 10000`; zero stops
+before preparation). Optional `objective_cases` and
+`protected_regression_margin_percent` as above. Paths are relative to the
+plan file. Each candidate patches the same unmodified frozen source commit.
+v1 patches may modify existing unrenamed `ggml/src` source files
+(`.c`/`.cc`/`.cpp`/`.h`/`.hpp`/`.cu`/`.cuh`/`.hip`) and must not edit
+tests, build files, inspector files, or the evaluator. Duplicate ordered
+patch identities are rejected at create. Durable state is
+`<home>/campaigns/<id>/state.json` with `frozen.json` and copied patches.
+
+Calibration is two baseline/baseline suite runs plus one `inconclusive`
+token-matching comparison. Screening is four AB/BA suite runs per candidate.
+Confirmation, if screening is eligible, is four fresh suite runs and reuses
+the screened candidate build. `max_suite_runs` is a count budget, not a
+wall-clock deadline. Guaranteed complete capacity for `N` candidates is
+`2 + 8N` suite runs.
+
+The demonstration plan is
+[`configs/campaigns/historical-mmvq-demo.yaml`](../configs/campaigns/historical-mmvq-demo.yaml):
+a historical known-negative MMVQ patch, not a suggested optimization.
+
+### Implementation plan
+
+1. **Core controller** — freeze-only `create`, hardware `resume`, JSON
+   `inspect`, Markdown `report`.
+2. **Problem portfolio** — [research-problems.md](research-problems.md).
+   Docs only; no structured catalog.
+3. **Reviewer / verification** — existing judge plus campaign-only token
+   parity and frozen objective/protected gates; preserve mixed verdicts.
+4. **Later hardware experiments** — post-merge pilot in the problem
+   portfolio. Not implied by landing the controller.
+
+Command examples and the full procedure live in
+[autoresearch.md](autoresearch.md).
 
 ## Versioning and schemas
 

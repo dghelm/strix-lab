@@ -5,8 +5,9 @@ Evidence-first, reproducible optimization research tooling for AMD Strix Halo.
 StrixLab is a local, CLI-first research harness for running reproducible
 optimization experiments on AMD Strix Halo hardware. It orchestrates existing
 runtimes and isolated native builds, records immutable run evidence, and exports
-deterministic, verifiable bundles. It is **not** an inference runtime, a
-benchmark leaderboard, or an automatic upstream patch bot.
+deterministic, verifiable bundles. Bounded profile-guided campaigns sit above
+that evidence scaffold; they never push upstream. StrixLab is **not** an
+inference runtime, a benchmark leaderboard, or an automatic upstream patch bot.
 
 Why it exists: optimization claims are only worth as much as the evidence behind
 them. StrixLab exists to make experiments reproducible, to keep correctness gates
@@ -36,13 +37,53 @@ A clean checkout provides a strict, evidence-oriented CLI:
 - **Offline comparison judge** — compare two finalized, equivalent, successful
   runs into one immutable comparison run with a conservative, non-scoring
   verdict (`compare`).
+- **Bounded campaigns** — freeze a reviewed patch list and inspect or report
+  its local state (`campaign create`, `inspect`, `report`). `resume` is the
+  hardware evaluator, not part of the CPU-only path.
+
+### Bounded profile-guided campaigns
+
+A campaign freezes one evaluator and a conservative reviewed patch list,
+screens candidates, and requires a fresh confirmation before
+`objective_met_provisional`. The raw judge verdict, including `mixed`, is
+preserved. Failed and inconclusive findings stay in the record. Interrupted
+candidates stay spent; resume continues untouched candidates. Calibration
+interruption stops the campaign. Campaigns do not replace the evidence CLI,
+do not open upstream pull requests, and do not require ROCm 10.
+
+See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure and
+schema, and [`docs/research-problems.md`](docs/research-problems.md)
+("Profile-guided llama.cpp research problems") for ranked, bounded
+hypotheses and the smallest honest post-merge pilot. That portfolio is
+docs-only, not a catalog.
+
+`create` is freeze-only. Copy the campaign `id` from the printed JSON.
+
+```bash
+uv run strixlab campaign create configs/campaigns/historical-mmvq-demo.yaml
+CAMPAIGN_ID='...'
+
+uv run strixlab campaign inspect "$CAMPAIGN_ID"
+uv run strixlab campaign report "$CAMPAIGN_ID"
+```
+
+That demonstration plan uses a historical known-negative MMVQ patch. It is a
+harness demo, not a suggested optimization. `resume` builds and runs the
+pinned smoke suite on hardware and is not a five-minute CPU check:
+
+```bash
+uv run strixlab campaign resume "$CAMPAIGN_ID"
+```
 
 ### What does not exist yet
 
 - No web service, official judge, leaderboard, score, or "winning solution".
 - No model downloader; you must obtain the pinned GGUF yourself and keep it
   outside the repository.
-- No upstream pull-request bot; StrixLab never pushes changes or opens PRs.
+- No automatic upstream patch bot; StrixLab never pushes runtime changes or
+  opens upstream pull requests. A retain decision is local evidence, not a PR.
+- No fabricated campaign measurements. `campaign resume` is authorized
+  hardware work, not a CPU-only checkout check.
 
 Community experiments (see below) are locally executed, reviewable
 investigations—not remotely executed submissions or official scores.
@@ -188,6 +229,10 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
+- **Campaign problems** — ranked, bounded hypotheses and the post-merge
+  pilot belong in [`docs/research-problems.md`](docs/research-problems.md)
+  (docs-only; not a catalog); the controller procedure is
+  [`docs/autoresearch.md`](docs/autoresearch.md).
 - **Scenarios** — propose a stable benchmark question in an Issue, then add its
   checked-in suite and supporting configs in a scenario PR.
 - **Experiments** — propose one reproducible candidate in a PR and collect
