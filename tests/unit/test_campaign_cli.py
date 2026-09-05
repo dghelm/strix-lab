@@ -440,6 +440,69 @@ def test_relative_home_exits_one_without_leaking_secret(
     )
 
 
+_CORE_DIGEST = "a" * 64
+_CORE_STATUSES = (
+    ("ready", 0),
+    ("completed", 0),
+    ("running", 1),
+    ("blocked", 1),
+    ("interrupted", 1),
+    ("budget_exhausted", 1),
+)
+
+
+def _core_state(**overrides: Any) -> Any:
+    campaigns = pytest.importorskip("strixlab.campaigns")
+    values: dict[str, Any] = {
+        "id": "campaign-fixture",
+        "frozen_sha256": _CORE_DIGEST,
+        "status": "ready",
+        "reason": "created; no execution admitted",
+        "max_suite_runs": 10,
+    }
+    values.update(overrides)
+    return campaigns.CampaignState(**values)
+
+
+@pytest.mark.parametrize(("status", "exit_code"), _CORE_STATUSES)
+def test_inspect_real_campaign_state_status_exit_codes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str, exit_code: int
+) -> None:
+    state = _core_state(status=status, reason="fixture")
+    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
+    with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+        result = _invoke(
+            ["campaign", "inspect", "campaign-fixture", "--home", str(tmp_path / "home")],
+            env={"PATH": "/usr/bin"},
+        )
+    assert result.exit_code == exit_code
+    payload = json.loads(result.stdout)
+    assert payload["id"] == "campaign-fixture"
+    assert payload["status"] == status
+    assert payload["frozen_sha256"] == _CORE_DIGEST
+    assert payload["phases"] == []
+    assert payload["objective_cases"] == []
+    assert payload["protected_regression_margin_percent"] == 0.0
+    assert payload["baseline"] is None
+
+
+def test_report_uses_exported_render_campaign_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _core_state()
+    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
+    with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
+        result = _invoke(
+            ["campaign", "report", "campaign-fixture", "--home", str(tmp_path / "home")],
+            env={"PATH": "/usr/bin"},
+        )
+    assert result.exit_code == 0
+    assert "# Campaign campaign-fixture" in result.stdout
+    assert "Status: ready" in result.stdout
+    assert "Protected regression margin: 0%" in result.stdout
+    assert "Objective cases:" in result.stdout
+
+
 def test_inspect_unknown_id_uses_core_when_available(tmp_path: Path) -> None:
     pytest.importorskip("strixlab.campaigns")
     home = tmp_path / "home"
