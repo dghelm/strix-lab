@@ -24,7 +24,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install required native host test dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build libssl-dev
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
@@ -49,7 +49,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install required native host test dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build libssl-dev
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
