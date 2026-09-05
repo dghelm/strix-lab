@@ -138,3 +138,38 @@ def build_value() -> dict[str, Any]:
         },
         "targets": ["llama-bench", "llama-server", "test-backend-ops"],
     }
+
+
+@pytest.fixture
+def capsule_value() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "id": "rocm10-topk-capsule",
+        "candidate": "baseline-hip",
+        "machine": "strix-halo-128g",
+        "build": {
+            "source_id": "rocm10-topk",
+            "source_commit": "a" * 40,
+            "toolchain_mode": "rocm",
+            "gfx_target": "gfx1151",
+            "target": "topk-capsule",
+        },
+        "contract": {
+            "protocol": "native-capsule-v1",
+            "scenario_sha256": "b" * 64,
+            "comparison": {
+                "policy": "paired-latency-log-bootstrap-v1",
+                "protected_regression_bps": 500,
+                "permitted_arm_differences": [
+                    "candidate-id",
+                    "source-candidate",
+                    "build-output",
+                ],
+            },
+        },
+        "timeouts": {
+            "describe_seconds": 30.0,
+            "correctness_seconds": 300.0,
+            "benchmark_seconds": 1800.0,
+        },
+    }

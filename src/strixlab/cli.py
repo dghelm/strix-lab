@@ -22,28 +22,42 @@ from strixlab.builds import (
     inspect_recipe,
 )
 from strixlab.bundles import BundleError, export_bundle, verify_bundle
+from strixlab.campaign_cli import campaign_app
+from strixlab.capsule_runs import (
+    CapsuleExecutionError,
+    CapsuleRunError,
+    run_capsule,
+)
 from strixlab.cmake_build import CMakeBuildError, execute_cmake_build
-from strixlab.config import read_manifest
+from strixlab.config import parse_manifest_text, read_manifest
 from strixlab.doctor import (
     ReportWriteError,
     SensitiveInterpolationError,
     run_doctor,
 )
 from strixlab.evidence import RunError, RunOutcome, inspect_run
-from strixlab.git_boundary import SshTrust
+from strixlab.git_boundary import GitBoundaryError, SshTrust
+from strixlab.judge import JudgeError, JudgeExecutionError, compare_runs
 from strixlab.manifests import (
     BuildProfileV1,
+    CapsuleManifestV1,
     MachineProfileV1,
     ManifestRegistry,
+    ModelManifestV1,
     SourceLockV1,
     SuiteManifestV1,
     resolve_and_validate_manifest,
     validate_manifest,
 )
+from strixlab.models import (
+    ModelError,
+    receipt_registry_sha256,
+    verify_model_at_source,
+)
 from strixlab.paths import resolve_home
 from strixlab.records import RecordError
 from strixlab.schema_registry import schema_resource_bytes
-from strixlab.secret_policy import RedactionContext
+from strixlab.secret_policy import RedactionContext, reject_sensitive_interpolations
 from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 from strixlab.sources import SourceError, cleanup_source, inspect_source, prepare_source
@@ -76,14 +90,18 @@ source_app = typer.Typer(help="Prepare and manage isolated Git source worktrees.
 build_app = typer.Typer(help="Reproducibly build, inspect, and clean pinned source trees.")
 run_app = typer.Typer(help="Inspect finalized run-evidence records.")
 bundle_app = typer.Typer(help="Export and verify deterministic run-evidence bundles.")
+model_app = typer.Typer(help="Verify registered models against prepared sources.")
 app.add_typer(schema_app, name="schema")
 app.add_typer(manifest_app, name="manifest")
 app.add_typer(source_app, name="source")
 app.add_typer(build_app, name="build")
 app.add_typer(run_app, name="run")
 app.add_typer(bundle_app, name="bundle")
+app.add_typer(model_app, name="model")
+app.add_typer(campaign_app, name="campaign")
 
 _EVIDENCE_DOMAIN_ERRORS = (OSError, ValueError, RunError, RecordError, BundleError)
+_MODEL_DOMAIN_ERRORS = (OSError, ValueError, ModelError, SourceError, GitBoundaryError)
 
 
 def _version_callback(value: bool) -> None:
@@ -472,6 +490,50 @@ def doctor(
     raise typer.Exit(code=1)
 
 
+@app.command("compare")
+def compare(
+    baseline_run_id: Annotated[str, typer.Argument(help="Finalized baseline run ID.")],
+    candidate_run_id: Annotated[str, typer.Argument(help="Finalized candidate run ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Compare two finalized successful suite runs into one immutable comparison run.
+
+    Authenticates both arms offline, pairs their matched throughput samples conservatively,
+    and finalizes a comparison run carrying canonical JSON and Markdown reports. It never
+    touches hardware, reruns an adapter, or mutates either arm. A statistical regression,
+    mixed, or inconclusive verdict is still a successfully executed comparison run.
+    """
+
+    environ, context = _evidence_terminal_context()
+    try:
+        result = compare_runs(
+            baseline_run_id,
+            candidate_run_id,
+            home=resolve_home(home),
+            environ=environ,
+        )
+    except JudgeExecutionError as exc:
+        # A comparison run was allocated but no report could be published; surface it.
+        _evidence_echo(f"comparison: {exc.run_id}", context, err=True)
+        if exc.record is not None:
+            _evidence_echo(f"record: {exc.record}", context, err=True)
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except JudgeError as exc:
+        # A pre-allocation failure: no run was created, so reveal no comparison id.
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except _EVIDENCE_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"compare failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    _evidence_echo(f"comparison: {result.run_id}", context)
+    _evidence_echo(f"verdict: {result.report.overall_verdict}", context)
+    _evidence_echo(f"record: {result.record}", context)
+
+
 @run_app.command("inspect")
 def run_inspect(
     run_id: Annotated[str, typer.Argument(help="Run ID.")],
@@ -593,6 +655,85 @@ def run_suite_command(
         raise typer.Exit(code=1)
 
 
+@run_app.command("capsule")
+def capsule_run_command(
+    capsule: Annotated[Path, typer.Argument(help="Versioned capsule manifest YAML path.")],
+    machine: Annotated[
+        Path,
+        typer.Option("--machine", help="Resolved machine-profile YAML path."),
+    ],
+    build: Annotated[str, typer.Option("--build", help="Machine-local build ID.")],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Run one verified native capsule and finalize an immutable run."""
+
+    environ, context = _evidence_terminal_context()
+    try:
+        manifest_input = capsule.read_bytes()
+        raw_capsule = parse_manifest_text(manifest_input.decode("utf-8"))
+        reject_sensitive_interpolations(raw_capsule)
+        manifest = resolve_and_validate_manifest("capsule", raw_capsule, environ)
+        if not isinstance(manifest, CapsuleManifestV1):
+            raise TypeError("capsule registry returned the wrong model")
+        raw_machine = read_manifest(machine)
+        reject_sensitive_interpolations(raw_machine)
+        machine_profile = resolve_and_validate_manifest("machine", raw_machine, environ)
+        if not isinstance(machine_profile, MachineProfileV1):
+            raise TypeError("machine registry returned the wrong model")
+    except ValidationError as exc:
+        _evidence_echo("invalid capsule invocation:", context, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _evidence_echo(f"  {location}: {error['msg']}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        _evidence_echo(
+            "invalid capsule invocation: sensitive environment interpolation is forbidden",
+            context,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except (OSError, UnicodeError, ValueError, yaml.YAMLError):
+        _evidence_echo("capsule run failed: unable to validate invocation", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        outcome = run_capsule(
+            manifest,
+            manifest_input,
+            machine_profile=machine_profile,
+            build_id=build,
+            home=resolve_home(home),
+            environ=environ,
+        )
+    except CapsuleExecutionError as exc:
+        _evidence_echo(f"run: {exc.run_id}", context, err=True)
+        if exc.record is not None:
+            _evidence_echo(f"record: {exc.record}", context, err=True)
+        _evidence_echo(f"capsule run failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except CapsuleRunError:
+        _evidence_echo("capsule run failed before allocating a run", context, err=True)
+        raise typer.Exit(code=1) from None
+    except _EVIDENCE_DOMAIN_ERRORS:
+        _evidence_echo("capsule run failed: unable to complete invocation", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    failed = outcome.outcome is not RunOutcome.SUCCESS
+    _evidence_echo(f"run: {outcome.run_id}", context, err=failed)
+    _evidence_echo(f"record: {outcome.inspection.record}", context, err=failed)
+    _evidence_echo(
+        f"capsule: {outcome.result.status} ({outcome.result.reason})",
+        context,
+        err=failed,
+    )
+    if failed:
+        raise typer.Exit(code=1)
+
+
 @bundle_app.command("export")
 def bundle_export(
     run_id: Annotated[str, typer.Argument(help="Run ID.")],
@@ -633,6 +774,63 @@ def bundle_verify(
         "run_record_sha256": inspection.run_record_sha256,
     }
     _evidence_echo(canonical_json_bytes(payload).decode(), context, nl=False)
+
+
+@model_app.command("verify")
+def model_verify(
+    manifest: Annotated[
+        Path,
+        # No parser-level filesystem validation: a missing, unreadable, or directory path
+        # is surfaced by ``read_manifest`` inside the RedactionContext-protected body, so a
+        # secret-bearing path can never be echoed by Typer before the safety check runs.
+        typer.Argument(help="Versioned model-manifest YAML path."),
+    ],
+    source: Annotated[
+        str,
+        typer.Option("--source", help="Prepared source preparation ID."),
+    ],
+    home: Annotated[
+        Path | None,
+        typer.Option("--home", help="Override the StrixLab data home."),
+    ] = None,
+) -> None:
+    """Verify a registered model with the prepared source and print its receipt SHA-256.
+
+    Leases the prepared source, derives the pinned GGUF inspector binding from it, runs
+    the existing model verifier, and prints only the receipt SHA-256 that ``run suite``
+    accepts. It never downloads weights or exposes binding hashes or paths as arguments.
+    Every terminal line is verified secret-safe before it is written.
+    """
+
+    environ, context = _evidence_terminal_context()
+    try:
+        raw = read_manifest(manifest)
+        model = resolve_and_validate_manifest("model", raw, environ)
+        if not isinstance(model, ModelManifestV1):
+            raise TypeError("model registry returned the wrong model")
+    except ValidationError as exc:
+        _evidence_echo("invalid model manifest:", context, err=True)
+        for error in exc.errors(include_input=False, include_url=False):
+            location = ".".join(str(part) for part in error["loc"]) or "manifest"
+            _evidence_echo(f"  {location}: {error['msg']}", context, err=True)
+        raise typer.Exit(code=1) from None
+    except SensitiveInterpolationError:
+        _evidence_echo(
+            "invalid model manifest: sensitive environment interpolation is forbidden",
+            context,
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+    except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+        _evidence_echo(f"model verify failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        receipt = verify_model_at_source(model, source, home=resolve_home(home))
+    except _MODEL_DOMAIN_ERRORS as exc:
+        _evidence_echo(f"model verify failed: {exc}", context, err=True)
+        raise typer.Exit(code=1) from None
+    _evidence_echo(receipt_registry_sha256(receipt), context)
 
 
 def configure_logging(level: int = logging.INFO) -> None:

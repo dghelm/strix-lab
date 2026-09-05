@@ -33,8 +33,9 @@ canonical development interface.
 ## Field reports
 
 Field reports are small, privacy-safe observations — repository-validation or
-provisioned smoke-suite runs, including failures and inconclusive results. To
-submit one, copy [`field-reports/TEMPLATE.md`](field-reports/TEMPLATE.md) to
+self-service hardware smoke-suite runs, including failures and inconclusive
+results that are not yet a candidate experiment. To submit one, copy
+[`field-reports/TEMPLATE.md`](field-reports/TEMPLATE.md) to
 `field-reports/YYYY-MM-DD-<short-slug>.md`, fill it in, and open a pull request.
 
 - One report per file, one report per pull request. Field-report PRs are
@@ -50,3 +51,21 @@ compare URL (for example
 `.../compare/main...your-branch?expand=1&template=field-report.md`). Linking the
 [field-report pull-request template](.github/PULL_REQUEST_TEMPLATE/field-report.md)
 source file alone does not apply it.
+
+## Scenarios, experiments, and replications
+
+Optimization work follows the PR-first process in
+[`docs/community-workflow.md`](docs/community-workflow.md):
+
+1. Propose a scenario in a **scenario proposal** Issue.
+2. Implement its suite and supporting configs in a **scenario** PR.
+3. Open one **experiment** PR for one reproducible candidate under that exact
+   scenario.
+4. GPU owners post matched baseline/candidate **replications** on that PR.
+5. Copy accepted summaries into the checked-in experiment record before merge;
+   later replications update it through follow-up PRs.
+
+PR comments coordinate work but are not canonical evidence records. Merging an
+experiment means it is reproducible and worth preserving, not that it is
+universally faster, production-ready, upstream-accepted, or an official score.
+Only maintainers assign `best-known`, and only within one exact scenario.

@@ -1,0 +1,9 @@
+schema_version: 1
+id: strix-llama
+kind: git
+url: https://github.com/halo-box/strix-llama.cpp.git
+commit: ca94157f70a2776e8da6b6849b50b45a083d0478
+branch_hint: master
+submodules: false
+adapter: llama_cpp
+allowed_dirty_state: false

@@ -25,6 +25,14 @@ documentation; the handoff remains ignored reference material.
 8. Imported challenge and candidate artifacts are data. Parsing is pure;
    environment resolution is an explicit trusted operation followed by full
    validation of the resolved result.
+9. Profile-guided campaigns freeze the evaluator before patches. Screening
+   and confirmation are separate phases. Calibration is distinct
+   baseline/baseline evidence. An interrupted candidate stays spent while
+   untouched candidates may continue; interrupted calibration stops. Count
+   budgets include calibration, confirmation, failures, and interruptions
+   and are not wall-clock deadlines. The raw judge verdict is preserved;
+   `objective_met_provisional` is campaign-local. A retain decision is never
+   an upstream push.
 
 ### Local storage trust boundary
 
@@ -58,6 +66,233 @@ Manifest handling has two deliberate entry points:
 Mapping keys are never interpolated. Environment replacements may not introduce
 unresolved tokens unless explicitly escaped as literals.
 
+## Native capsule v1 boundary
+
+`CAPSULE-001A` defines a library-only protocol and evidence adapter. It has no provider
+registry, comparison path, or implicit integration with the suite runtime. A trusted caller must
+already hold an active `RunSession` and supply the resolved `CapsuleManifestV1` plus its
+digest, a trusted absolute executable path plus expected SHA-256, a complete child
+environment and working directory, a caller-owned scratch root, and the applicable
+redaction context. The adapter does not lease or build artifacts, acquire a machine lock,
+observe hardware, reconstruct an environment, begin or finalize a run, or decide the
+caller's overall run outcome.
+
+The frozen capsule manifest binds `id`, opaque dash-identifier `candidate`, `machine`,
+and an authoritative build requirement: `source_id`, exact 40-character
+`source_commit`, `toolchain_mode` (`host` or `rocm`), `gfx_target`, and executable
+`target`. No profile label substitutes for those leased-build coordinates. Its contract
+is exactly `native-capsule-v1`, pins `scenario_sha256`, and carries the required frozen
+`CapsuleComparisonContractV1`. That comparison contract has the sole policy
+`paired-latency-log-bootstrap-v1`, a nullable strict integer
+`protected_regression_bps` from 0 through 10,000, and one of exactly two canonical
+`permitted_arm_differences` tuples: `("candidate-id",)` or
+`("candidate-id", "source-candidate", "build-output")`. Independent `describe`,
+`correctness`, and `benchmark` timeouts are finite, positive, and at most 3600 seconds.
+
+The adapter executes exactly three allowlisted child operations, in this order:
+`describe`, `correctness`, then `benchmark`. Each argv is fixed as
+`<trusted-executable> <operation> --request /proc/self/fd/<N>`; the literal
+`--request` marker and four-entry argv are mandatory, with no shell, discovery,
+free-form flag, or child-selected path. `<N>` is an inherited descriptor opened read-only
+over an immutable, write/grow/shrink/seal-locked memfd containing the exact canonical
+JSON request. The child receives only the caller's complete
+environment (`inherit_env=False`) and cwd. Stdout and stderr have independent hard byte
+bounds and the process always runs through the shared bounded runner. The executable is
+stream-hashed for stable descriptor metadata and content, matched to the caller's digest,
+and rechecked immediately before and after every child and once more before terminal
+publication. Request descriptors are checked against their pre-launch identity, seals,
+read-only access mode, and exact bytes; captured stream spools are independently checked
+against their exact bytes, sizes, and SHA-256 values.
+
+Every request binds protocol, operation, capsule ID, opaque candidate ID, scenario SHA,
+manifest SHA, and executable SHA. `correctness` carries the accepted `describe` response
+SHA, while `benchmark` carries the accepted `correctness` response SHA; both later
+requests also carry the accepted typed scenario contract and its digest. Every response
+must be exact UTF-8 canonical JSON and echo all of those bindings. Noncanonical JSON,
+unknown fields, coercible values, wrong echoes, non-finite values, or a response outside
+the hard bound is rejected. An optional canonical opaque payload is limited to 256 KiB
+and retained only in raw response evidence. It is deliberately absent from the generic
+terminal result and never participates in correctness, equivalence, statistics, or
+pass/fail; a later scenario-specific implementation such as `TOPK-001` may interpret it.
+
+`describe` returns the complete ordered scenario contract and must repeat the manifest's
+comparison contract exactly before the phase is accepted. Each zero-based ordered
+coordinate declares an exact coordinate ID, case ID, training/evaluation set, mode,
+input ID and SHA-256, warmup count, and sample count. Coordinate IDs and `(case_id,
+mode)` pairs are unique, at least one coordinate is evaluation, every sample count is at
+least five, and coordinates sharing a case ID must share their case set, input ID, and
+input digest. Metric, direction, and statistical policy are scenario-level contract
+facts rather than coordinate-local fields. `correctness` must reproduce the accepted
+coordinates exactly, without omission, duplication, or reordering, and every coordinate
+must pass before `benchmark` can start. `benchmark` must reproduce the same coordinates
+exactly and report exactly the declared number of positive finite ordered latency samples
+plus nonnegative workspace bytes for each. Later requests and terminal results propagate
+the accepted scenario unchanged.
+
+### Capsule comparison contract and offline comparison
+
+`paired-latency-log-bootstrap-v1` is scenario-neutral and lower-is-better. D2a defines
+and authenticates this contract. D2b1 adds the pure offline
+`compare_finalized_capsule_runs` boundary: it loads baseline then candidate, applies the
+closed admission projection, computes the directional statistics and verdicts, and returns
+a canonical in-memory report. It does not write evidence, allocate a run, publish a bundle,
+interpret TOPK payloads, or expose comparison CLI dispatch. Reversing the arms intentionally
+produces a different directional comparison; equal candidate IDs remain legal.
+
+For a coordinate with `n` positionally paired positive finite samples, the mathematical
+effect is `delta_i = ln(baseline_i / candidate_i)`, but implementations must evaluate it
+as `math.log(baseline_i) - math.log(candidate_i)` so the intermediate ratio cannot
+overflow. Positive delta means that the candidate is faster. The point estimate is
+`mean_log_effect = math.fsum(deltas) / n`; the geometric latency ratio is
+`math.exp(mean_log_effect)`, and improvement percent is
+`100 * math.expm1(mean_log_effect)`. Thus positive percentages are improvements and
+negative percentages are regressions. Workspace bytes are authenticated and reported
+per arm and as a delta, but never alter admission, intervals, noise, or verdicts.
+
+The interval is exactly 4,096 deterministic positional paired-bootstrap replicates.
+Each replicate makes `n` draws with replacement from the delta positions. For replicate
+`r` and draw `d`, compute SHA-256 over this exact call to
+`strixlab.source_identity.length_frame`:
+
+```python
+length_frame(
+    "strixlab.capsule.paired-latency-log-bootstrap.v1",
+    (
+        ("policy_id", b"paired-latency-log-bootstrap-v1"),
+        ("baseline_record_sha256", baseline_record_sha256.encode("ascii")),
+        ("candidate_record_sha256", candidate_record_sha256.encode("ascii")),
+        ("case_id", case_id.encode("utf-8")),
+        ("mode", mode.encode("utf-8")),
+        ("replicate", struct.pack(">Q", r)),
+        ("draw", struct.pack(">Q", d)),
+    ),
+)
+```
+
+The record values are the authenticated ASCII `record-sha256:` identities (that prefix
+followed by 64 lowercase hexadecimal characters), `r` is zero through 4,095, and `d` is
+zero through `n - 1`. `length_frame`
+contributes its fixed `b"strixlab-lf-v1\0"` prefix, UTF-8 domain preceded by its
+unsigned 32-bit big-endian byte length, unsigned 32-bit big-endian field count, then for
+each field in the shown order its ASCII label preceded by an unsigned 32-bit big-endian
+byte length and its value preceded by an unsigned 64-bit big-endian byte length. No
+comparison-contract digest, case set, or other input enters the seed. Interpret the first
+eight SHA-256 bytes as an unsigned big-endian integer modulo `n` to select the paired
+position. Replicate means also use `math.fsum / n`.
+
+For sorted zero-based values `x[0]` through `x[N - 1]`, the R-7 quantile at `p` uses
+`q = (N - 1) * p`. It returns `x[0]` when `q <= 0`, `x[N - 1]` when `q >= N - 1`, and
+otherwise sets `j = floor(q)` and `g = q - j` and returns
+`x[j] + g * (x[j + 1] - x[j])`. The 95 percent interval is this quantile at exactly
+`p = 0.025` and `p = 0.975` over the sorted 4,096 replicate means.
+
+Every median sorts its input first. For odd length `N`, it is `x[N // 2]`; for even
+length `N`, it is `math.fsum((x[N // 2 - 1], x[N // 2])) / 2`. Baseline noise is the
+log-MAD value `1.4826 * median(abs(log(baseline_i) - median(log(baseline))))`, using that
+median rule for both the baseline logs and their absolute deviations. The protected
+threshold uses the same rule on each arm's raw latency samples.
+
+A coordinate is inclusively `inconclusive` when `lower <= 0 <= upper` or
+`abs(mean_log_effect) <= baseline_log_mad`; otherwise it is `improvement` when both
+interval endpoints are strictly positive and `regression` when both are strictly
+negative. Only evaluation coordinates enter the provisional aggregate: all improvement,
+all regression, or all inconclusive preserves that verdict, while every other mixture is
+`mixed`. When `protected_regression_bps` is non-null, a coordinate is a protected
+regression only when both interval endpoints are strictly negative and
+`candidate_median / baseline_median > 1 + bps / 10_000`. A protected regression changes
+only a provisional aggregate `improvement` to `mixed`; every other provisional aggregate
+is unchanged. Thus 500 basis points protects strictly more than 5 percent regression,
+while exactly 5 percent is not protected. A null value disables only that additional
+guard.
+
+D2b1 fails closed rather than return a comparison whenever positional structure or
+arm lengths diverge, or whenever any input or derived delta, `math.fsum`, mean, digest
+index, quantile interpolation, logarithm, exponential, `expm1`, median, ratio, MAD,
+threshold, or percentage is non-finite, overflows, or otherwise cannot be represented by
+the specified operation.
+
+D2b1 admission uses this closed field-path normalization table. A listed
+difference is legal only when its exact token appears in the identical comparison
+contract on both arms; every unlisted semantic field remains byte-for-byte equal after
+strict authentication.
+
+| Difference token | Exact semantic field paths normalized arm-locally |
+|---|---|
+| `candidate-id` | `manifest.candidate`; `capsule/result.json.candidate`; `capsule/protocol/result.json.candidate`; and `candidate` in every accepted capsule protocol request and response. |
+| `source-candidate` | `capsule/build.json.canonical.source.{candidate_id,content_tree_id,snapshot_id,source_evidence_sha256,snapshot_manifest,diff,patches}` and only `capsule/build.json.canonical.source.source_evidence.{preparation_id,request_digest,patches,root_tree,content_tree_id,candidate_id,diff_file,diff_sha256,diff_size_bytes,status,created_at}` within the nested evidence object. `manifest.build.source_id`, `manifest.build.source_commit`, and nested `source_evidence.{source_id,source_locator,source_locator_sha256,base_commit,branch_hint,adapter,submodules_enabled,submodules}` are not normalized; locator, base source, adapter, and submodule policy/evidence remain equal. |
+| `build-output` | `capsule/build.json.{build_id,canonical_record_sha256}`; `capsule/build.json.canonical.{recipe_id,build_id,producer_attempt_id}`; `capsule/build.json.canonical.artifacts.{artifact_set_id,inspections,capture_tools,cmake_cache_sha256,compile_commands_sha256}`; `capsule/build.json.canonical.artifacts.targets[*].target_id`; `capsule/build.json.canonical.artifacts.artifacts[*].{mode,size_bytes,sha256}`; `capsule/result.json.{build_id,canonical_record_sha256,executable_sha256}`; `capsule/protocol/result.json.executable_sha256`; and `executable_sha256` in every accepted capsule protocol request and response. Target and artifact tuple cardinality/order and `targets[*].{schema_version,name,target_type,artifacts}` plus `artifacts[*].{schema_version,path,kind,elf_type,targets,runtime_dependency}` remain equal, preserving the target topology and associating changed content only with existing targets/paths. `profile_sha256`, toolchain mode, canonical environment, requested targets, selections, tools, and the manifest target remain equal. |
+
+Derived and authentication digests are never broad semantic-difference tokens. Each arm
+must independently authenticate its record SHA, manifest SHA, portable entry/blob SHA,
+input-snapshot SHA, result SHA, protocol-result SHA, request SHA, response SHA, canonical
+build-record SHA, and executable SHA. They may differ only as the recomputed consequence
+of an allowed exact field above and are removed from semantic equality rather than
+whitelisted by a provenance label. The scenario-contract SHA, comparison-contract SHA,
+machine-profile SHA, coordinate-structure SHA, ordered `(case_set, case_id, mode)` keys,
+and all other unaffected digests must remain equal.
+
+Admission uses explicit frozen projections with exact v1 field guards. Stable enclosing
+result input roles and paths, protocol/phase status, process outcome and capture semantics,
+stderr identity, correctness, and coordinate structure remain equal. Per-arm snapshot
+authentication establishes the accepted request/response echoes and chains; admission
+removes only their recomputed digests and stdout byte identities, process duration,
+benchmark latency/workspace inputs, and the already non-semantic opaque payload.
+
+Portable evidence is confined to `capsule/protocol/{describe,correctness,benchmark}/`:
+canonical `request.json`, a secret-free `process.json`, canonical `stdout.json` when
+accepted as canonical JSON or one text fallback otherwise, and optional exact UTF-8
+`stderr.txt`. Correctness roles are used for describe/correctness, samples roles for
+benchmark, and the summary role for `capsule/protocol/result.json`, which is always
+published last. Exact bytes are never duplicated under conflicting media types. Every
+prospective artifact is secret-scanned before publication, and the active `RunSession`
+rechecks it at the write boundary.
+
+Ordinary spawn, timeout, output-limit, exit, parsing, echo, correctness, coverage, and
+sample-completeness failures produce a strict `failed` protocol result with the truthful
+completed-prefix evidence. Unsafe child output is withheld and produces a safe failed
+result. Executable mismatch/drift, request or spool divergence, a pre-existing protocol
+subtree, or a publication-integrity failure raises `CapsuleIntegrityError`; such a path
+never publishes a success claim. In every case the caller remains solely responsible for
+the enclosing run's terminal outcome.
+
+`CAPSULE-001C` adds the narrow production caller for that adapter and the command
+`strixlab run capsule CAPSULE_MANIFEST --machine MACHINE_MANIFEST --build BUILD_ID
+[--home PATH]`. It leases only the named existing build; it never leases a source or
+creates either source or build state. Before allocating a run it requires the exact
+machine ID, source ID and base commit, toolchain mode, requested gfx membership, and
+unique executable target recorded by the canonical leased build, then reverifies the
+lease. The SHA-256 passed to the adapter is computed from the exact canonical
+`manifest.resolved.yaml` serialization used by `begin_run`.
+
+Acquisition order is build lease, `RunSession`, then machine lock; release is the reverse.
+After run allocation, the complete canonical `capsule/build.json` and
+`capsule/machine.json` payloads are preflighted together against the union of ambient and
+canonical-child secrets before either is published, then published in that order. A lock
+refusal produces a strict failed enclosing
+`capsule/result.json` without executing the protocol. Under an acquired lock the runner
+allocates a mode-0700 scratch root, reconstructs the complete canonical child environment
+without ambient inheritance, invokes the library adapter, and removes scratch on every
+exit. It reverifies the build lease while the machine lock is still held and publishes the
+enclosing `capsule/result.json` only after authenticating the adapter's actual portable
+`capsule/protocol/result.json` entry against the returned canonical result bytes. The
+enclosing result binds that digest, the manifest target, the recorded executable digest,
+and the protocol's exact closed reason without embedding a duplicate protocol result; the
+run succeeds if and only if the protocol passed. Trusted executable and scratch
+host-absolute paths never enter portable evidence.
+
+Failures before allocation raise `CapsuleRunError` and create no run. Any exception after
+allocation finalizes failure and raises `CapsuleExecutionError`, which exposes only the run
+ID, an optional finalized record, and one fixed safe message. Ordinary protocol failures
+remain structured failed results. CLI diagnostics use the ambient redaction context and do
+not relay child output, exception causes, or free-form failure text. The generic runner,
+finalized successful-capsule snapshot loader, and pure directional comparison library are
+available. The snapshot independently
+reauthenticates the scenario comparison contract against the manifest and exposes its
+canonical digest, permitted-difference tuple, and ordered `(case_set, case_id, mode)`
+alignment keys without deciding admission. The planned TOPK scenario remains inactive:
+there is no checked-in runnable capsule configuration, comparison evidence/CLI dispatch,
+or TOPK payload interpretation.
+
 ## Future challenge boundary
 
 StrixLab may later own local challenge bundles, capsules, practice runs, evidence,
@@ -70,6 +305,33 @@ the subprocess timeout contract is not a security sandbox for untrusted GPU code
 Challenge support begins only after immutable evidence, comparison judging, and
 the capsule process contract exist. The foundation merely keeps manifest and CLI
 registries extensible so later challenge kinds do not require restructuring.
+
+Local profile-guided campaigns are a different layer: they reuse the existing
+suite and comparison judge against a frozen evaluator and a finite reviewed
+patch list. They are not hosted challenges, official scores, or an upstream
+patch bot. The procedure, v1 commands, and staged implementation plan are in
+[Bounded profile-guided campaigns](autoresearch.md). Ranked, bounded
+hypotheses and the smallest honest post-merge pilot are in
+[Profile-guided llama.cpp research problems](research-problems.md). That
+portfolio is docs-only, not an experiment catalog, and separates v1 patch
+campaigns from configuration tuning and blocked workloads.
+
+For the pilot, GitHub is the collaboration and catalog boundary—not an execution
+service. Existing suite manifests are called **scenarios**. A **candidate** is a
+reproducible change evaluated under one scenario; a local execution is a **run**;
+one contributor's matched baseline and candidate attempt—with a comparison when
+both pass correctness—is a **replication**; and the cataloged investigation of
+one candidate under one scenario is an **experiment**. An experiment may
+collect many replications.
+
+Scenario proposals begin as Issues and their immutable rules land through
+scenario PRs. Candidate experiments use separate PRs. Comments coordinate
+replications, but accepted summaries are copied into checked-in Markdown records
+before merge, with later observations added by follow-up PR. This deliberately
+avoids a premature submission API or database. A future site may render the
+repository catalog read-only; executing community candidate code on hosted GPU
+machines remains a separate security and operations problem, not an implied
+StrixLab capability.
 
 ## Common lexical rules
 
@@ -939,6 +1201,182 @@ factory, a machine-lock factory, and the three adapter callables, all defaulting
 production implementations — making lock refusal, filesystem identity changes, cleanup,
 and exact call order deterministic in unit tests without a GPU, ROCm, model weights,
 network, or real binaries.
+
+## Offline comparison judge v1
+
+The comparison judge (`strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID`) is the first
+boundary above the smoke suite. It is purely offline: it never reruns an adapter, acquires
+the GPU lock, inspects a live binary or model, or mutates either arm. It authenticates two
+**distinct, finalized, successful** smoke-suite runs, compares their matched throughput
+samples conservatively, and finalizes one immutable comparison run carrying a canonical
+JSON report and a Markdown rendering of it. Comparing a run to itself is rejected; a no-op
+comparison is two independently finalized runs, which may share the same build. A
+statistical `regression`, `mixed`, or `inconclusive` report is still a *successfully
+executed* comparison run — the evidence-run outcome and the statistical verdict are
+separate concepts, and the required no-op result is `inconclusive`, never a fabricated win.
+
+### Authenticated suite snapshot
+
+`load_finalized_suite_snapshot(run_id, *, home)` is the one reusable, descriptor-anchored
+seam the judge uses to obtain an immutable, fully re-authenticated view of one finalized
+successful run. It calls `inspect_run` (requiring `RunOutcome.SUCCESS` and retaining the
+authenticated `record-sha256` digest), then reads the resolved manifest and every portable
+blob through the shared `read_record_member` primitive — owned, no-follow, identity-checked
+reads that reject a symlink or same-uid inode swap during the read — and rebinds each byte
+to its content address. It parses `manifest.resolved.yaml` strictly as `SuiteManifestV1` and
+requires its bytes to equal `canonical_yaml_bytes` of that model's dump; authenticates the
+single `suite/result.json` summary entry and requires its bytes to equal `canonical_json_bytes`
+of the strictly parsed `SuiteResultV1`; binds the result's suite/machine/model IDs, passed
+status, correctness projections, and planned-equals-completed schedule to the manifest;
+authenticates the three input snapshots (`suite/build.json`, `suite/model.json`,
+`suite/machine.json`) and binds their payload IDs and digests to the result; and recomputes
+**every** correctness and measurement projection from the authenticated terminal adapter
+samples (`BackendOpsSampleV1`, `LlamaServerSampleV1`, `LlamaBenchSampleV1`), requiring the
+stored `BackendOpsVerdictV1`, each `GreedyVerdictV1` prompt, and every measurement
+projection to equal the recomputation exactly. `result.samples` must be the exact ordered
+schedule of a passed run (backend correctness, ordered greedy checks, ordered warmups, then
+ordered measurements) with no extra, missing, duplicated, or orphan reference, and the
+measurement coordinates must be exactly one projection per `(case_id, window)` with
+`repetitions_per_window` positive finite samples each. A canonical but semantically misbound
+record fails closed, and a tampered blob is rejected by the immutable record verifier before
+the snapshot loads.
+
+### Equivalence, statistics, and verdict
+
+Two arms are comparable only when their run IDs are distinct, their canonical resolved-manifest
+bytes are identical, their suite/machine/model IDs and their machine and model input-payload
+digests match (the build input may differ), their ordered measurement coordinates and
+repetition counts match exactly, and each case carries at least `MIN_PAIRED_SAMPLES = 5`
+paired samples. Build IDs, build-record digests, sample digests, and measurements may differ:
+this milestone compares two executions of the *same resolved suite*, never arbitrary
+compatible-looking workloads.
+
+Samples are paired by `(case_id, window, repetition_index)` in manifest order and compared
+only within the same performance case (higher is better); cases are never pooled and no
+cross-case score is invented. For positive finite pairs, the judge computes the paired
+log-delta mean with `math.fsum`, the arithmetic means, `speed_ratio = exp(mean_d)`, and
+`delta_percent = 100·expm1(mean_d)`. The `paired-log-bootstrap-v1` interval is exactly 4096
+replicate means and the R-7 95% percentile interval; each replicate resamples the paired log
+deltas with replacement, selecting indices from SHA-256 over a length-framed
+`strixlab.judge.bootstrap.v1` domain binding both arms' record digests, the case ID, and the
+zero-based replicate and draw indexes, so the interval is deterministic and bound to these two
+runs and this case only — it describes matched positions in these two runs, not run-to-run or
+population uncertainty. Baseline noise is `1.4826·MAD` of the baseline log values. The
+per-case verdict is `inconclusive` when the interval includes zero or `|mean_d|` is within the
+baseline noise, `improvement` when the interval is wholly above zero, and `regression`
+otherwise; the overall verdict is the exact projection (`inconclusive`/`improvement`/`regression`
+when uniform, else `mixed`). Every arithmetic domain/overflow failure, a nonpositive or
+non-finite value, and any report-model validation failure caused by the derived statistics is
+translated to a typed statistics error before any run is allocated.
+
+### Immutable comparison run and reports
+
+Before allocation the judge completely loads and re-authenticates both snapshots, checks
+equivalence, computes the statistics, instantiates the strict frozen report models
+(`ComparisonRequestV1`, `ComparisonArmV1`, `CaseComparisonV1`, `ComparisonReportV1`; each
+recomputes its verdict and validates every delta/CI/noise percentage against its log form with
+a single `rel_tol=abs_tol=1e-12` tolerance), renders the JSON and Markdown, and preflights the
+exact two portable outputs against the member, aggregate, entry, path, file-count, and
+single-media-per-blob rules. No arm payloads are copied, so capacity is bounded. The
+experiment ID is `compare-` plus the first 24 hex characters of SHA-256 over the canonical
+request JSON; the canonical request YAML is the captured input and its dump the resolved
+input. The run writes exactly `comparison/report.json` (`application/json`, role `comparison`)
+and `comparison/report.md` (`text/markdown`, role `comparison`) and finalizes
+`RunOutcome.SUCCESS` for every valid report. A load, equivalence, or statistics failure is a
+pre-allocation error that creates no run; a publication or integrity failure after allocation
+finalizes failure and surfaces the run ID and immutable record.
+
+The Markdown is a pure rendering of the validated report — identities and digests, policy, the
+scope warning, the overall verdict, and one stable table row per case — ending in exactly one
+newline with no environment-derived free text. Crucially, a comparison report authenticates
+its source run IDs, record digests, result digests, and the shared resolved-manifest digest,
+but it does **not** copy either arm's evidence tree. A comparison bundle is therefore a
+portable *derived* report, not a standalone proof of its arms: to verify the arms offline,
+export the two source-run bundles as well. The judge reuses the existing bundle system rather
+than building a second bundler.
+
+## Bounded profile-guided campaigns
+
+Campaigns are the next local layer above the smoke suite and offline judge. A
+campaign freezes one source, build, machine, model, suite, and judge policy,
+then evaluates a finite reviewed patch list. It does not download models,
+provision ROCm, interpret TOPK payloads, or push upstream. ROCm 10 is not a
+prerequisite.
+
+The procedure is hypothesis → fixed evaluator → patch → screen → fresh
+confirmation → retain/reject. Next campaign is a new reviewed plan informed by
+`campaign report`; old campaigns are never rewritten. Failed, negative,
+inconclusive, and interrupted findings are retained. The existing `compare`
+contract is unchanged. Campaigns add cross-arm greedy token parity (v1 is
+launch/layout-preserving only) and a frozen objective/protected-regression
+gate. Optional `objective_cases` defaults to all performance cases; every
+objective must have existing `improvement`; every remaining case is
+automatically protected with `percent_ci_low >=
+-protected_regression_margin_percent` (default `0`, finite `0 <= m < 100`).
+Both screening AB/BA comparisons and both fresh confirmation AB/BA
+comparisons must pass those gates plus token parity. The raw judge verdict
+stays as-is, including `mixed`. The campaign label is
+`objective_met_provisional`, not judge improvement and not `best-known`.
+Per-case intervals are not simultaneous or campaign-level confidence, and
+the protected-case bound is not a formal noninferiority proof. Calibration
+is unchanged.
+
+A whole phase is reserved before suite work. Reserved slots stay spent on
+failure, crash, or interruption. An interrupted candidate is spent and
+terminal; resume continues untouched candidates and does not replay it.
+Interrupted calibration stops the campaign. Some lower-layer failures never
+return an authenticatable run ID; the phase records that a failure-evidence
+link is unavailable rather than claiming every failure is linked. The
+evaluator is frozen at create and rechecked on resume; drift fails closed.
+There is no campaign JSON Schema registration; `create` uses a strict
+`CampaignPlanV1` parser.
+
+### v1 command surface
+
+`strixlab campaign create PLAN.yaml [--home PATH]` freezes a plan and prints
+canonical JSON; it does not run suites. `strixlab campaign resume ID [--home
+PATH]` evaluates the finite remainder on hardware and prints JSON.
+`strixlab campaign inspect ID [--home PATH]` re-validates evidence links and
+prints JSON. `strixlab campaign report ID [--home PATH]` prints Markdown from
+that verified state. There are no phase-separating flags.
+
+Required plan fields: `schema_version` `1`, dash-id `id`, relative paths
+`suite`, `machine`, `source`, `build`, `model`, `candidates` as `{id,
+patches}` (ids unique and not `baseline`), `max_candidates` (`>=` list
+length, `<= 100`), and `max_suite_runs` (`>= 0`, `<= 10000`; zero stops
+before preparation). Optional `objective_cases` and
+`protected_regression_margin_percent` as above. Paths are relative to the
+plan file. Each candidate patches the same unmodified frozen source commit.
+v1 patches may modify existing unrenamed `ggml/src` source files
+(`.c`/`.cc`/`.cpp`/`.h`/`.hpp`/`.cu`/`.cuh`/`.hip`) and must not edit
+tests, build files, inspector files, or the evaluator. Duplicate ordered
+patch identities are rejected at create. Durable state is
+`<home>/campaigns/<id>/state.json` with `frozen.json` and copied patches.
+
+Calibration is two baseline/baseline suite runs plus one `inconclusive`
+token-matching comparison. Screening is four AB/BA suite runs per candidate.
+Confirmation, if screening is eligible, is four fresh suite runs and reuses
+the screened candidate build. `max_suite_runs` is a count budget, not a
+wall-clock deadline. Guaranteed complete capacity for `N` candidates is
+`2 + 8N` suite runs.
+
+The demonstration plan is
+[`configs/campaigns/historical-mmvq-demo.yaml`](../configs/campaigns/historical-mmvq-demo.yaml):
+a historical known-negative MMVQ patch, not a suggested optimization.
+
+### Implementation plan
+
+1. **Core controller** — freeze-only `create`, hardware `resume`, JSON
+   `inspect`, Markdown `report`.
+2. **Problem portfolio** — [research-problems.md](research-problems.md).
+   Docs only; no structured catalog.
+3. **Reviewer / verification** — existing judge plus campaign-only token
+   parity and frozen objective/protected gates; preserve mixed verdicts.
+4. **Later hardware experiments** — post-merge pilot in the problem
+   portfolio. Not implied by landing the controller.
+
+Command examples and the full procedure live in
+[autoresearch.md](autoresearch.md).
 
 ## Versioning and schemas
 

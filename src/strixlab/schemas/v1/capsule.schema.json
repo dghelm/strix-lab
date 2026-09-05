@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "CapsuleBuildRequirementV1": {
+      "additionalProperties": false,
+      "description": "Authoritative build coordinates required from the caller's verified lease.",
+      "properties": {
+        "gfx_target": {
+          "pattern": "^gfx[0-9a-f]+(?![\\s\\S])",
+          "title": "Gfx Target",
+          "type": "string"
+        },
+        "source_commit": {
+          "pattern": "^[0-9a-f]{40}(?![\\s\\S])",
+          "title": "Source Commit",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "target": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*(?![\\s\\S])",
+          "title": "Target",
+          "type": "string"
+        },
+        "toolchain_mode": {
+          "enum": [
+            "host",
+            "rocm"
+          ],
+          "title": "Toolchain Mode",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_commit",
+        "toolchain_mode",
+        "gfx_target",
+        "target"
+      ],
+      "title": "CapsuleBuildRequirementV1",
+      "type": "object"
+    },
+    "CapsuleComparisonContractV1": {
+      "additionalProperties": false,
+      "description": "The only generic paired-latency comparison policy admitted by capsule v1.",
+      "properties": {
+        "permitted_arm_differences": {
+          "enum": [
+            [
+              "candidate-id"
+            ],
+            [
+              "candidate-id",
+              "source-candidate",
+              "build-output"
+            ]
+          ],
+          "items": {
+            "enum": [
+              "candidate-id",
+              "source-candidate",
+              "build-output"
+            ],
+            "type": "string"
+          },
+          "title": "Permitted Arm Differences",
+          "type": "array"
+        },
+        "policy": {
+          "const": "paired-latency-log-bootstrap-v1",
+          "title": "Policy",
+          "type": "string"
+        },
+        "protected_regression_bps": {
+          "anyOf": [
+            {
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Protected Regression Bps"
+        }
+      },
+      "required": [
+        "policy",
+        "protected_regression_bps",
+        "permitted_arm_differences"
+      ],
+      "title": "CapsuleComparisonContractV1",
+      "type": "object"
+    },
+    "CapsuleContractV1": {
+      "additionalProperties": false,
+      "description": "The fixed process protocol and immutable scenario identity.",
+      "properties": {
+        "comparison": {
+          "$ref": "#/$defs/CapsuleComparisonContractV1"
+        },
+        "protocol": {
+          "const": "native-capsule-v1",
+          "title": "Protocol",
+          "type": "string"
+        },
+        "scenario_sha256": {
+          "pattern": "^[0-9a-f]{64}(?![\\s\\S])",
+          "title": "Scenario Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "protocol",
+        "scenario_sha256",
+        "comparison"
+      ],
+      "title": "CapsuleContractV1",
+      "type": "object"
+    },
+    "CapsuleTimeoutsV1": {
+      "additionalProperties": false,
+      "description": "Independent hard wall-clock bounds for the three protocol children.",
+      "properties": {
+        "benchmark_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Benchmark Seconds",
+          "type": "number"
+        },
+        "correctness_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Correctness Seconds",
+          "type": "number"
+        },
+        "describe_seconds": {
+          "exclusiveMinimum": 0,
+          "maximum": 3600,
+          "title": "Describe Seconds",
+          "type": "number"
+        }
+      },
+      "required": [
+        "describe_seconds",
+        "correctness_seconds",
+        "benchmark_seconds"
+      ],
+      "title": "CapsuleTimeoutsV1",
+      "type": "object"
+    }
+  },
+  "$id": "urn:strixlab:schema:capsule:1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen library-only declaration for one native capsule candidate.",
+  "properties": {
+    "build": {
+      "$ref": "#/$defs/CapsuleBuildRequirementV1"
+    },
+    "candidate": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Candidate",
+      "type": "string"
+    },
+    "contract": {
+      "$ref": "#/$defs/CapsuleContractV1"
+    },
+    "id": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Id",
+      "type": "string"
+    },
+    "machine": {
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?![\\s\\S])",
+      "title": "Machine",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "timeouts": {
+      "$ref": "#/$defs/CapsuleTimeoutsV1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "candidate",
+    "machine",
+    "build",
+    "contract",
+    "timeouts"
+  ],
+  "title": "CapsuleManifestV1",
+  "type": "object"
+}

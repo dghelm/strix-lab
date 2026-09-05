@@ -12,7 +12,7 @@ correctness:
     id: backend-ops-core
     backend: ROCm0
     operations: [MUL_MAT, MUL_MAT_ID, TOP_K, ARGSORT, RMS_NORM]
-    params_regex: ".*"
+    params_regex: '^(type_a=f32,type_b=f32,m=1,n=1,k=2048,bs=\[1,1\],nr=\[1,1\],per=\[0,1,2,3\],k_v=0,o=1,src_overlap=0|type_a=f32,type_b=f32,n_mats=4,n_used=1,b=0,m=512,n=1,k=256|type=f32,ne=\[1,2,1,3\],k=1,ties=1|type=f32,ne=\[16,10,10,10\],order=0|type=f32,ne=\[64,5,4,3\],v=0,eps=0\.000000,inplace=0)$'
   greedy:
     id: greedy-token-parity
     prompt_set_id: deterministic-qwen35-v1

@@ -5,8 +5,9 @@ Evidence-first, reproducible optimization research tooling for AMD Strix Halo.
 StrixLab is a local, CLI-first research harness for running reproducible
 optimization experiments on AMD Strix Halo hardware. It orchestrates existing
 runtimes and isolated native builds, records immutable run evidence, and exports
-deterministic, verifiable bundles. It is **not** an inference runtime, a
-benchmark leaderboard, or an automatic upstream patch bot.
+deterministic, verifiable bundles. Bounded profile-guided campaigns sit above
+that evidence scaffold; they never push upstream. StrixLab is **not** an
+inference runtime, a benchmark leaderboard, or an automatic upstream patch bot.
 
 Why it exists: optimization claims are only worth as much as the evidence behind
 them. StrixLab exists to make experiments reproducible, to keep correctness gates
@@ -25,22 +26,73 @@ A clean checkout provides a strict, evidence-oriented CLI:
 - **Schema / manifest validation** — versioned, packaged JSON Schemas.
 - **Isolated source preparation** — StrixLab-owned disposable Git worktrees.
 - **Reproducible builds** — pinned, inspectable native build trees.
+- **Self-service pilot inputs** — checked-in source/build profiles and local
+  model verification produce the IDs required by the smoke suite.
 - **Deterministic smoke suite** — correctness-first suite execution that
   finalizes an immutable run (`run suite`).
 - **Run inspection** — verify a finalized run's index, record, and checksums
   (`run inspect`).
 - **Deterministic bundles** — export and verify portable run-evidence bundles
   (`bundle export`, `bundle verify`).
+- **Offline comparison judge** — compare two finalized, equivalent, successful
+  runs into one immutable comparison run with a conservative, non-scoring
+  verdict (`compare`).
+- **Bounded campaigns** — freeze a reviewed patch list and inspect or report
+  its local state (`campaign create`, `inspect`, `report`). `resume` is the
+  hardware evaluator, not part of the CPU-only path.
+
+### Bounded profile-guided campaigns
+
+A campaign freezes one evaluator and a conservative reviewed patch list,
+screens candidates, and requires a fresh confirmation before
+`objective_met_provisional`. The raw judge verdict, including `mixed`, is
+preserved. Failed and inconclusive findings stay in the record. Interrupted
+candidates stay spent; resume continues untouched candidates. Calibration
+interruption stops the campaign. Campaigns do not replace the evidence CLI,
+do not open upstream pull requests, and do not require ROCm 10.
+
+See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure and
+schema, and [`docs/research-problems.md`](docs/research-problems.md)
+("Profile-guided llama.cpp research problems") for ranked, bounded
+hypotheses and the smallest honest post-merge pilot. That portfolio is
+docs-only, not a catalog.
+
+`create` is freeze-only. Copy the campaign `id` from the printed JSON.
+
+```bash
+uv run strixlab campaign create configs/campaigns/historical-mmvq-demo.yaml
+CAMPAIGN_ID='...'
+
+uv run strixlab campaign inspect "$CAMPAIGN_ID"
+uv run strixlab campaign report "$CAMPAIGN_ID"
+```
+
+That demonstration plan uses a historical known-negative MMVQ patch. It is a
+harness demo, not a suggested optimization. `resume` builds and runs the
+pinned smoke suite on hardware and is not a five-minute CPU check:
+
+```bash
+uv run strixlab campaign resume "$CAMPAIGN_ID"
+```
 
 ### What does not exist yet
 
 - No web service, official judge, leaderboard, score, or "winning solution".
-- No model-registration CLI, and no shipped public source-lock or build-profile
-  examples that provision a build ID and model receipt end to end.
-- No upstream pull-request bot; StrixLab never pushes changes or opens PRs.
+- No model downloader; you must obtain the pinned GGUF yourself and keep it
+  outside the repository.
+- No automatic upstream patch bot; StrixLab never pushes runtime changes or
+  opens upstream pull requests. A retain decision is local evidence, not a PR.
+- No fabricated campaign measurements. `campaign resume` is authorized
+  hardware work, not a CPU-only checkout check.
 
-Field reports (see below) are provisional observations, **not** judged
-submissions or official scores.
+Community experiments (see below) are locally executed, reviewable
+investigations—not remotely executed submissions or official scores.
+
+### Planned scenarios
+
+- [ROCm 10 top-k on gfx1151](docs/rocm10-topk-gfx1151.md) is a reviewed scenario
+  contract and staged implementation plan. The generic capsule runner now exists, but
+  no checked-in capsule manifest or TOPK payload interpretation makes it runnable yet.
 
 ## Requirements
 
@@ -74,26 +126,87 @@ non-mutating to machine configuration, but it **does** write a versioned
 `doctor.json` report beneath the resolved StrixLab home. See
 [`docs/doctor.md`](docs/doctor.md) for the report and exit contracts.
 
-## Provisioned-pilot smoke suite
+## Self-service Strix Halo smoke suite
 
-Running the current smoke suite end to end requires an already-prepared build ID
-and a machine-local verified model receipt SHA-256. Both currently require a
-provisioned, operator-assisted setup — the repository does not yet ship a
-self-service path that produces them.
+The pilot path is now self-service for a Strix Halo owner with ROCm installed at
+`/opt/rocm`. It builds the pinned runtime locally and never downloads or copies
+model weights. Obtain the pinned `Qwen_Qwen3.5-4B-Q4_K_M.gguf` yourself, verify
+that it matches the size and SHA-256 in
+[`configs/models/qwen35-4b-smoke.yaml`](configs/models/qwen35-4b-smoke.yaml), and
+place it at:
 
-```bash
-uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
-  --machine configs/machines/strix-halo-128g.yaml \
-  --build <BUILD_ID> \
-  --model-receipt <MODEL_RECEIPT_SHA256>
-uv run strixlab run inspect <RUN_ID>
-uv run strixlab bundle export <RUN_ID> <NEW_BUNDLE_DIRECTORY>
-uv run strixlab bundle verify <NEW_BUNDLE_DIRECTORY>
+```text
+$MODELS/qwen35-4b/Qwen_Qwen3.5-4B-Q4_K_M.gguf
 ```
 
-Replace every `<...>` placeholder with a real value before running: angle
-brackets are shell redirection syntax, so the block above is illustrative and is
-not directly pasteable.
+Then run the following commands from the repository root. Source and build
+preparation print their IDs on the first line, model verification prints only
+the receipt digest, and the suite prints its ID after `run:`. Copy only the ID
+or digest—not a label—into the corresponding shell variable.
+
+```bash
+export MODELS=/absolute/path/to/your/model-root
+
+uv run strixlab doctor --machine configs/machines/strix-halo-128g.yaml
+
+uv run strixlab source prepare configs/sources/strix-llama.yaml
+PREPARATION_ID='prep-strix-llama-...'
+
+uv run strixlab build prepare "$PREPARATION_ID" \
+  configs/builds/hip-rocm-gfx1151.yaml
+BUILD_ID='build-sha256:...'
+
+uv run strixlab model verify configs/models/qwen35-4b-smoke.yaml \
+  --source "$PREPARATION_ID"
+MODEL_RECEIPT_SHA256='...'
+
+uv run strixlab run suite configs/suites/smoke-qwen35.yaml \
+  --machine configs/machines/strix-halo-128g.yaml \
+  --build "$BUILD_ID" \
+  --model-receipt "$MODEL_RECEIPT_SHA256"
+RUN_ID='run-...'
+
+uv run strixlab run inspect "$RUN_ID"
+uv run strixlab bundle export "$RUN_ID" "../strixlab-bundle-$RUN_ID"
+uv run strixlab bundle verify "../strixlab-bundle-$RUN_ID"
+```
+
+Optionally, run the suite a second time to produce an equivalent run and compare
+the two offline. The comparison is conservative and non-scoring; its no-op result
+is `inconclusive`, never a fabricated win. A comparison bundle is a derived report
+that is **not** independently verifiable without both source-run bundles, so export
+all three when offline verification is required.
+
+```bash
+# CANDIDATE_RUN_ID is a second `run suite` of the same suite/machine/model.
+uv run strixlab compare "$RUN_ID" "$CANDIDATE_RUN_ID"
+COMPARISON_RUN_ID='run-...'
+
+uv run strixlab run inspect "$COMPARISON_RUN_ID"
+uv run strixlab bundle export "$COMPARISON_RUN_ID" "../strixlab-bundle-$COMPARISON_RUN_ID"
+uv run strixlab bundle export "$CANDIDATE_RUN_ID" "../strixlab-bundle-$CANDIDATE_RUN_ID"
+```
+
+### ROCm 10 side-by-side bring-up
+
+The installed `/opt/rocm` lane remains the ROCm 7.2.4 control. A separate
+`configs/builds/hip-rocm10-gfx1151.yaml` profile describes the expected
+`/opt/rocm-10` ROCm Core SDK 10.0.0 lane without changing global paths or system
+alternatives. This lane is provisional, inactive, and not runnable until both its
+artifact-authenticity gate and its separately reviewed prefix-inventory verifier
+gate are cleared. The profile is not an installer and its environment is not
+proof of runtime isolation; build evidence also cannot authenticate untracked
+external ROCm library bytes.
+
+Read [`docs/rocm10-bringup.md`](docs/rocm10-bringup.md) before provisioning or
+using that prefix. It records the current blockers, every later human-approved
+system mutation, and the required same-source no-op build comparison.
+
+The quoted `...` assignments are deliberate copy points, not literal values.
+Run the pilot from a credential-clean shell: StrixLab scans evidence and terminal
+output for values held in sensitive-named environment variables and fails closed
+rather than risk publishing one. Do not unset variables you do not understand;
+start a clean shell or remove only credentials you know are unnecessary.
 
 ## Local state and safety
 
@@ -116,20 +229,38 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
-- **Hardware field reports** — provisioned-pilot smoke-suite observations,
-  including failures and inconclusive runs.
+- **Campaign problems** — ranked, bounded hypotheses and the post-merge
+  pilot belong in [`docs/research-problems.md`](docs/research-problems.md)
+  (docs-only; not a catalog); the controller procedure is
+  [`docs/autoresearch.md`](docs/autoresearch.md).
+- **Scenarios** — propose a stable benchmark question in an Issue, then add its
+  checked-in suite and supporting configs in a scenario PR.
+- **Experiments** — propose one reproducible candidate in a PR and collect
+  matched baseline/candidate replications from community GPU owners.
+- **Hardware field reports** — lightweight smoke-suite observations and setup
+  friction that do not yet constitute a candidate experiment.
 - **Docs and tests** — narrow clarifications and coverage.
 - **Narrow code contributions** — keep them small, evidence-oriented, and
   independently testable.
 
-To share an observation, copy the field-report template and open a pull request:
+The core vocabulary is intentionally small: a suite manifest defines a
+**scenario**; a **candidate** is the change being tested; a **run** is one local
+execution; a **replication** is one contributor's matched baseline and candidate
+attempt, plus a comparison when both pass correctness; and an **experiment** is
+the catalog entry that can collect many replications. Another person's rerun is
+a replication—not universal "validation."
 
+Start with the community workflow, then choose the matching GitHub template:
+
+- Workflow: [`docs/community-workflow.md`](docs/community-workflow.md)
+- Experiment catalog and template: [`experiments/`](experiments/)
 - Report template: [`field-reports/TEMPLATE.md`](field-reports/TEMPLATE.md)
-- Contribution policy and the field-report route: [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- Contribution policy: [`CONTRIBUTING.md`](CONTRIBUTING.md)
 - Coding-agent execution contract: [`llms.txt`](llms.txt)
 
-Field reports carry small summaries, identifiers, digests, exact commands, and
-redacted excerpts only. Never commit model weights, raw StrixLab homes, private
+GitHub coordinates review and catalogs small summaries, identifiers, digests,
+commands, and redacted notes. Contributors execute candidate code only on
+machines they control. Never commit model weights, raw StrixLab homes, private
 data, credentials, or evidence bundles.
 
 ## License

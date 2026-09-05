@@ -162,6 +162,32 @@ def test_build_schema_rejects_trailing_line_terminators(
     _assert_runtime_and_schema_reject("build", build_value)
 
 
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.pop("machine"),
+        lambda value: value["build"].pop("source_commit"),
+        lambda value: value["build"].update(profile="untrusted-label"),
+        lambda value: value["build"].update(toolchain_mode="cuda"),
+        lambda value: value["build"].update(gfx_target="sm_90"),
+        lambda value: value["timeouts"].update(describe_seconds=3600.1),
+        lambda value: value["timeouts"].update(correctness_seconds=0),
+        lambda value: value["timeouts"].update(benchmark_seconds=3601),
+        lambda value: value["contract"].pop("comparison"),
+        lambda value: value["contract"]["comparison"].update(policy="topk-paired-log-bootstrap-v1"),
+        lambda value: value["contract"]["comparison"].update(protected_regression_bps=10_001),
+        lambda value: value["contract"]["comparison"].update(
+            permitted_arm_differences=["candidate-id", "build-output"]
+        ),
+    ],
+)
+def test_capsule_schema_matches_authoritative_runtime_contract(
+    mutate: Any, capsule_value: dict[str, Any]
+) -> None:
+    mutate(capsule_value)
+    _assert_runtime_and_schema_reject("capsule", capsule_value)
+
+
 def _resolved_model(value: dict[str, Any]) -> dict[str, Any]:
     resolved = deepcopy(value)
     resolved["artifact"]["file"]["local_path"] = "/data/models/qwen35-2b/model.gguf"

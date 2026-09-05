@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from strixlab.manifests import (
     BuildProfileV1,
+    CapsuleManifestV1,
     MachineProfileV1,
     ManifestRegistry,
     ModelManifestV1,
@@ -49,8 +50,84 @@ def test_all_v1_manifests_validate(
     assert validate_manifest("build", build_value).model_dump(mode="python") == build_value
 
 
+def test_capsule_manifest_binds_authoritative_build_and_machine(
+    capsule_value: dict[str, Any],
+) -> None:
+    manifest = validate_manifest("capsule", capsule_value)
+
+    assert isinstance(manifest, CapsuleManifestV1)
+    assert manifest.machine == "strix-halo-128g"
+    assert manifest.candidate == "baseline-hip"
+    assert manifest.build.source_id == "rocm10-topk"
+    assert manifest.build.source_commit == "a" * 40
+    assert manifest.build.toolchain_mode == "rocm"
+    assert manifest.build.gfx_target == "gfx1151"
+    assert manifest.build.target == "topk-capsule"
+    assert manifest.contract.protocol == "native-capsule-v1"
+    assert manifest.contract.comparison.policy == "paired-latency-log-bootstrap-v1"
+    assert manifest.contract.comparison.protected_regression_bps == 500
+    assert manifest.contract.comparison.permitted_arm_differences == (
+        "candidate-id",
+        "source-candidate",
+        "build-output",
+    )
+
+
+def test_capsule_manifest_tree_is_frozen(capsule_value: dict[str, Any]) -> None:
+    manifest = CapsuleManifestV1.model_validate(capsule_value)
+
+    with pytest.raises(ValidationError, match="frozen"):
+        manifest.machine = "other-machine"
+    with pytest.raises(ValidationError, match="frozen"):
+        manifest.build.target = "other-target"
+    with pytest.raises(ValidationError, match="frozen"):
+        manifest.contract.comparison.protected_regression_bps = None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value.pop("machine"),
+        lambda value: value["build"].pop("source_id"),
+        lambda value: value["build"].pop("source_commit"),
+        lambda value: value["build"].pop("toolchain_mode"),
+        lambda value: value["build"].pop("gfx_target"),
+        lambda value: value["build"].pop("target"),
+        lambda value: value["build"].update(profile="untrusted-label"),
+        lambda value: value["contract"].pop("comparison"),
+        lambda value: value["contract"]["comparison"].update(policy="other-policy"),
+        lambda value: value["contract"]["comparison"].update(
+            permitted_arm_differences=["candidate-id", "build-output"]
+        ),
+    ],
+)
+def test_capsule_manifest_rejects_incomplete_or_profile_label_build_identity(
+    capsule_value: dict[str, Any], mutate: Any
+) -> None:
+    mutate(capsule_value)
+    with pytest.raises(ValidationError):
+        CapsuleManifestV1.model_validate(capsule_value)
+
+
+@pytest.mark.parametrize("field", ["describe_seconds", "correctness_seconds", "benchmark_seconds"])
+@pytest.mark.parametrize("value", [0.0, 3600.0001, float("nan"), float("inf")])
+def test_capsule_phase_timeouts_are_positive_finite_and_at_most_one_hour(
+    capsule_value: dict[str, Any], field: str, value: float
+) -> None:
+    capsule_value["timeouts"][field] = value
+    with pytest.raises(ValidationError):
+        CapsuleManifestV1.model_validate(capsule_value)
+
+
 def test_registry_is_extensible_and_sorted() -> None:
-    assert ManifestRegistry.kinds() == ("build", "machine", "model", "source-lock", "suite")
+    assert ManifestRegistry.kinds() == (
+        "build",
+        "capsule",
+        "machine",
+        "model",
+        "source-lock",
+        "suite",
+    )
 
 
 def test_registered_model_resolves_and_keeps_raw_template(model_value: dict[str, Any]) -> None:

@@ -19,6 +19,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+  "numpy>=1.26,<3",
   "platformdirs>=4,<5",
   "pydantic>=2.12,<3",
   "pyyaml>=6,<7",
@@ -27,9 +28,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/halo-box/strix-lab"
-Issues = "https://github.com/halo-box/strix-lab/issues"
-Repository = "https://github.com/halo-box/strix-lab"
+Homepage = "https://github.com/dghelm/strix-lab"
+Issues = "https://github.com/dghelm/strix-lab/issues"
+Repository = "https://github.com/dghelm/strix-lab"
 
 [project.scripts]
 strixlab = "strixlab.cli:main"

@@ -82,7 +82,10 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 if "--version" in sys.argv:
-    sys.stderr.write("version: 0.3.0-dev (build 1, commit ca94157)\\n")
+    sys.stderr.write(
+        "version: 0.3.0-dev "
+        "(build 0, commit ca94157f70a2776e8da6b6849b50b45a083d0478)\\n"
+    )
     sys.stderr.write("built with tests for Linux x86_64\\n")
     raise SystemExit(0)
 if "--help" in sys.argv:
@@ -317,7 +320,7 @@ def test_pinned_capability_fixtures() -> None:
         (FIXTURES / "help.stdout.txt").read_text(encoding="utf-8"),
         toolchain=toolchain,
     )
-    assert capabilities.short_commit == "ca94157"
+    assert capabilities.commit == "ca94157f70a2776e8da6b6849b50b45a083d0478"
     assert capabilities.required_options == (
         "model",
         "host",
@@ -334,6 +337,30 @@ def test_pinned_capability_fixtures() -> None:
         parse_help_capabilities(
             "----- common params -----\n--modelish FNAME\n", toolchain=toolchain
         )
+
+
+def test_version_capability_accepts_authenticated_patched_tree_suffix() -> None:
+    clean = (FIXTURES / "version.stderr.txt").read_text(encoding="utf-8")
+    dirty = clean.replace(
+        "ca94157f70a2776e8da6b6849b50b45a083d0478",
+        "ca94157f70a2776e8da6b6849b50b45a083d0478-dirty",
+        1,
+    )
+
+    assert parse_version_capability(dirty) == "built with GNU 16.2.1 for Linux x86_64"
+
+
+@pytest.mark.parametrize("suffix", ["-candidate", "-Dirty", "-dirty-extra"])
+def test_version_capability_rejects_unrecognized_commit_suffix(suffix: str) -> None:
+    clean = (FIXTURES / "version.stderr.txt").read_text(encoding="utf-8")
+    changed = clean.replace(
+        "ca94157f70a2776e8da6b6849b50b45a083d0478",
+        f"ca94157f70a2776e8da6b6849b50b45a083d0478{suffix}",
+        1,
+    )
+
+    with pytest.raises(LlamaServerGrammarError):
+        parse_version_capability(changed)
 
 
 def test_completion_response_is_strict_and_allows_immediate_eos() -> None:
