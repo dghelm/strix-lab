@@ -60,7 +60,10 @@ to launch/layout-preserving candidates.
   must pass those objective/protected gates **and** cross-arm token parity.
   The raw judge overall verdict is preserved, including `mixed`. The campaign
   label is `objective_met_provisional`. That label is not judge improvement
-  and not `best-known`.
+  and not `best-known`. Per-case intervals are not simultaneous or
+  campaign-level confidence, and the protected-case bound is not a formal
+  noninferiority proof. Calibration stays two baseline/baseline runs plus one
+  token-matching `inconclusive` comparison.
 - **Reservation:** a whole phase is reserved before any suite work (2 slots
   for calibration, 4 for screening, 4 for confirmation). Reserved slots stay
   spent on failure, crash, or interruption; there is no automatic retry.

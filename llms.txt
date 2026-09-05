@@ -51,7 +51,10 @@ Confirmation is four fresh runs if screening is eligible. Both screening
 comparisons and both confirmation comparisons must pass the frozen
 objective/protected gates and cross-arm greedy token parity. Raw judge
 `mixed` stays `mixed`; the campaign label is `objective_met_provisional`.
-Token identity means launch/layout-preserving candidates only.
+Per-case intervals are not simultaneous or campaign-level confidence, and
+the protected-case bound is not a formal noninferiority proof. Token
+identity means launch/layout-preserving candidates only. Calibration is
+unchanged.
 
 An interrupted candidate phase is spent and terminal; resume continues
 untouched candidates and does not replay it. Interrupted calibration stops

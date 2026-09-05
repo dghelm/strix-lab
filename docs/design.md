@@ -1317,6 +1317,9 @@ Both screening AB/BA comparisons and both fresh confirmation AB/BA
 comparisons must pass those gates plus token parity. The raw judge verdict
 stays as-is, including `mixed`. The campaign label is
 `objective_met_provisional`, not judge improvement and not `best-known`.
+Per-case intervals are not simultaneous or campaign-level confidence, and
+the protected-case bound is not a formal noninferiority proof. Calibration
+is unchanged.
 
 A whole phase is reserved before suite work. Reserved slots stay spent on
 failure, crash, or interruption. An interrupted candidate is spent and
