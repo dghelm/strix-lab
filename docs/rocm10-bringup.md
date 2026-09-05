@@ -298,6 +298,52 @@ backend, environment, namespace, credential and policy assumptions. Neither
 `uname` nor empty user-visible lists suffice. This slice supplies no production
 path to create or attach such a qualification and changes no activation gate.
 
+### Prefix inventory slice (unqualified)
+
+`strixlab.rocm_prefix.inspect_prefix(parent_fd, name)` inventories a quiescent,
+caller-owned prefix using a parent directory descriptor and one UTF-8 leaf name.
+The completed `PrefixInventoryV1` records the root at path `""`, sorted descendants,
+mode/owner, regular-file lengths and SHA-256, literal symlink targets, inode identity
+brackets, and the existing metadata observer result. Unsupported or failed xattr
+probes retain their status and errno. `metadata_coverage` is always `unknown`;
+`link_closure` remains `not-checked`. Completion is an observation, not admission,
+qualification, permission to copy, or activation of ROCm 10.
+
+One private Linux x86_64 `openat2` helper guards root, descent, payload, and final
+binding opens with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_XDEV` and
+`O_NOFOLLOW | O_CLOEXEC`. Mount crossings, including same-device bind mounts, fail
+closed; there is no `st_dev` fallback. The caller's parent descriptor is the
+starting authority, without proof of its ancestors. Inode types are classified
+with `O_PATH`; non-directories must have one link. Special mode bits are recorded,
+not policy-approved. A regular-file read uses `O_NONBLOCK` and checks the opened
+identity before reading; a raced device could have been opened before that check.
+The metadata observer still uses named probes bracketed by identity and guarded
+binding checks. These are not atomic guarantees against transient mounts, ABA
+replacement, hostile same-UID writers, or mutation after the scan.
+
+Collection bounds are one million descendants, 8 GiB per file, 32 GiB total file
+payload, 256 path components, 256 owned descriptors, 4096 UTF-8 bytes per path or
+link target, and 64 MiB of charged serialized evidence and enumeration buffers.
+Enumeration is charged before retaining/sorting names; entry evidence is validated
+and charged before hashing. File hashing uses 64 KiB reads and requires exact EOF.
+An iterative traversal checks directory membership before and after descendants;
+a final rewalk checks all bindings, identities, and metadata again. Any detected
+drift, malformed record, unsupported guarded-open ABI, or resource failure yields
+no completed inventory. These are implementation budgets, not a process RSS limit.
+
+`compare_prefixes(expected, observed)` validates both completed maps and compares
+only recorded semantic fields, ignoring inode numbers, timestamps, directory
+size/link count, and the root's external leaf name. Equal unknown metadata remains
+unknown. It counts every differing path and returns at most 128 sample paths.
+`resolve_inventory_links(inventory)` separately resolves the completed map without
+filesystem access. It expands symlinks before later `..`, requires directories for
+intermediate/trailing components, and reports absolute, escaping, dangling,
+non-directory, cyclic, or expansion-limited targets. Root-directory resolution is
+valid. Limits are 40 expansions per link, one million cumulative component-work
+units, 64 KiB queued target components, and 64 MiB charged output evidence. The
+separate link result cannot upgrade the inventory's metadata coverage or admission
+state. This slice has no CLI, SDK execution, extraction, copy, or activation path.
+
 ### Extraction and copy contract
 
 The future, separately reviewed implementation must be descriptor anchored and
