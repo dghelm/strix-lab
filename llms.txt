@@ -2,9 +2,10 @@
 
 StrixLab is pre-alpha, local, CLI-first research tooling for reproducible AMD
 Strix Halo optimization experiments. It orchestrates existing runtimes and
-isolated native builds and records immutable, verifiable run evidence. It is not
-an inference runtime, leaderboard, remote code-execution service, or upstream
-patch bot.
+isolated native builds and records immutable, verifiable run evidence. Bounded
+profile-guided campaigns sit above that scaffold and never push upstream. It is
+not an inference runtime, leaderboard, remote code-execution service, or
+automatic upstream patch bot.
 
 ## Before changing code
 
@@ -12,11 +13,45 @@ patch bot.
 - Use `uv`. There is no second task runner and no pre-commit framework.
 - Keep changes narrow, evidence-oriented, and independently testable.
 
+## Bounded profile-guided campaigns
+
+Read `docs/autoresearch.md` before adding campaign plans or interpreting
+campaign JSON. The ranked hypothesis list is `docs/research-problems.md`.
+
+A campaign is a local, finite investigation of reviewed patches against one
+frozen evaluator. The required loop is: hypothesis → fixed evaluator → patch →
+screen → fresh confirmation → retain/reject → next campaign. Screening is
+exploration only. Confirmation must use new baseline and candidate runs, not
+the screening evidence. Keep failed, negative, and inconclusive findings.
+
+v1 commands:
+
+```bash
+uv run strixlab campaign create path/to/plan.yaml
+uv run strixlab campaign inspect "$CAMPAIGN_ID"
+uv run strixlab campaign resume "$CAMPAIGN_ID"
+```
+
+`create` freezes the plan and does not run suites. `resume` evaluates remaining
+phases and is hardware work for later; do not run GPU campaigns, download
+models, or provision ROCm as part of scaffold documentation. `inspect` prints
+canonical JSON state from `<home>/campaigns/<id>/state.json`. There is no
+exploration-versus-confirmation flag, no automatic upstream push, and no ROCm
+10 prerequisite.
+
+Preserve the raw judge verdict, including `mixed`. A campaign
+`objective_met_provisional` label is not judge improvement and not
+`best-known`. Do not invent extra campaign flags, treat mixed or inconclusive
+as a win, reuse screening runs as confirmation, relax `objective_cases` or the
+protected-regression margin after screening, or open a pull request because a
+candidate was retained.
+
 ## Planned scenarios
 
 - `docs/rocm10-topk-gfx1151.md` fixes the planned ROCm 10 top-k contract and
   CAPSULE-001/TOPK-001 sequence. The generic capsule runner exists, but no checked-in
   capsule manifest or TOPK payload interpretation makes that scenario runnable.
+  That scenario is not a campaign prerequisite.
 
 ## Repository validation (no special hardware)
 
@@ -155,6 +190,7 @@ commands, and redacted excerpts.
 ## Authorization boundaries
 
 Do not push, open a pull request, change any external repository, or claim a
-solution, score, or "win" without explicit human authorization. StrixLab
-experiments are community-reviewed local observations, not remotely executed
-submissions.
+solution, score, or "win" without explicit human authorization. A campaign
+retain decision is local evidence, not authorization to push runtime source or
+open an upstream PR. StrixLab experiments and campaigns are community-reviewed
+local observations, not remotely executed submissions.

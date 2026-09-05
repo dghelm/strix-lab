@@ -25,6 +25,10 @@ documentation; the handoff remains ignored reference material.
 8. Imported challenge and candidate artifacts are data. Parsing is pure;
    environment resolution is an explicit trusted operation followed by full
    validation of the resolved result.
+9. Profile-guided campaigns freeze the evaluator before patches. Screening
+   (exploration) and confirmation are separate phases; failed and inconclusive
+   findings remain evidence. A retain decision is local and never an upstream
+   push.
 
 ### Local storage trust boundary
 
@@ -297,6 +301,13 @@ the subprocess timeout contract is not a security sandbox for untrusted GPU code
 Challenge support begins only after immutable evidence, comparison judging, and
 the capsule process contract exist. The foundation merely keeps manifest and CLI
 registries extensible so later challenge kinds do not require restructuring.
+
+Local profile-guided campaigns are a different layer: they reuse the existing
+suite and comparison judge against a frozen evaluator and a finite reviewed
+patch list. They are not hosted challenges, official scores, or an upstream
+patch bot. The procedure, v1 commands, and staged implementation plan are in
+[Bounded profile-guided campaigns](autoresearch.md). The ranked hypothesis
+list is [Profile-guided llama.cpp research problems](research-problems.md).
 
 For the pilot, GitHub is the collaboration and catalog boundary—not an execution
 service. Existing suite manifests are called **scenarios**. A **candidate** is a
@@ -1276,6 +1287,74 @@ but it does **not** copy either arm's evidence tree. A comparison bundle is ther
 portable *derived* report, not a standalone proof of its arms: to verify the arms offline,
 export the two source-run bundles as well. The judge reuses the existing bundle system rather
 than building a second bundler.
+
+## Bounded profile-guided campaigns
+
+Campaigns are the next local layer above the smoke suite and offline judge. A
+campaign freezes one source, build, machine, model, suite, and judge policy,
+then evaluates a finite reviewed patch list. It does not download models,
+provision ROCm, interpret TOPK payloads, or push upstream. ROCm 10 is not a
+prerequisite. Hardware execution is later; the scaffold is the controller and
+the problem portfolio.
+
+The agent-visible procedure is hypothesis → fixed evaluator → patch → screen →
+fresh confirmation → retain/reject → next campaign. Screening is exploration
+only. Confirmation uses new baseline and candidate runs. Failed, negative, and
+inconclusive findings are retained. The existing `compare` contract is
+unchanged; campaigns add a campaign-only cross-arm greedy token-parity gate
+before treating a comparison as correctness-preserving acceptance. The raw
+overall judge verdict is preserved, including `mixed`. A campaign may
+separately label `objective_met_provisional` when every frozen objective case
+has verdict `improvement` and every remaining protected case satisfies
+`percent_ci_low >= -protected_regression_margin_percent` on both screening
+comparisons and both fresh confirmations. That label is not judge
+improvement and not `best-known`.
+
+### v1 command surface
+
+`strixlab campaign create PLAN.yaml [--home PATH]` validates and freezes the
+plan without running suites. `strixlab campaign resume CAMPAIGN_ID [--home
+PATH]` evaluates the finite remainder. `strixlab campaign inspect CAMPAIGN_ID
+[--home PATH]` prints canonical JSON state. There is no separate report
+command and no flag that collapses screening into confirmation.
+
+Plan fields are `schema_version` (literal `1`), dash-id `id`, relative paths
+`suite`, `machine`, `source`, `build`, and `model`, a `candidates` list of
+`{id, patches}` objects, `max_candidates` (`>=` the candidate list length),
+`max_suite_runs` (`>= 0`; zero stops before preparation), optional
+`objective_cases` (nonempty unique performance case IDs; omission means all),
+and optional `protected_regression_margin_percent` (`0 <= m < 100`, default
+`0`). Paths are relative to the plan file. Each candidate patches the same
+unmodified frozen source commit. v1 allows patches under `ggml/src` as a
+scope guard, not as protection against dishonest executables, and forbids
+build, test, inspector, and evaluator edits. Duplicate ordered patch
+identities are rejected at create. Exhausted suite-run budget stops before
+source preparation. Commands emit canonical JSON; durable state lives at
+`<home>/campaigns/<id>/state.json` with frozen input copies.
+
+Calibration is two distinct no-op baseline suites and must compare
+`inconclusive` with cross-arm token parity; a failed calibration does not
+yield a permissive campaign. Screening and confirmation each run whole-suite
+AB then BA (four suite runs per phase). A successful candidate that reaches
+confirmation therefore costs ten suite runs including calibration. AB/BA
+balances whole-suite order; it is not temporally paired sampling and is not a
+campaign-level confidence claim.
+
+### Implementation plan
+
+1. **Core controller** — freeze, resume remaining phases, inspect JSON.
+   Durable reservation before side effects; interrupted attempts stay spent.
+2. **Problem portfolio** — [research-problems.md](research-problems.md) ranks
+   bounded hypotheses. Docs only; no structured catalog until a consumer
+   exists.
+3. **Reviewer / verification** — independent review of campaign evidence,
+   existing judge plus the campaign-only token-parity gate, preservation of
+   negative findings.
+4. **Later hardware experiments** — calibrate, profile a baseline, try
+   one-mechanism patch candidates, confirm. Not part of the scaffold landing.
+
+Command examples and the full procedure live in
+[autoresearch.md](autoresearch.md).
 
 ## Versioning and schemas
 

@@ -5,8 +5,9 @@ Evidence-first, reproducible optimization research tooling for AMD Strix Halo.
 StrixLab is a local, CLI-first research harness for running reproducible
 optimization experiments on AMD Strix Halo hardware. It orchestrates existing
 runtimes and isolated native builds, records immutable run evidence, and exports
-deterministic, verifiable bundles. It is **not** an inference runtime, a
-benchmark leaderboard, or an automatic upstream patch bot.
+deterministic, verifiable bundles. Bounded profile-guided campaigns sit above
+that evidence scaffold; they never push upstream. StrixLab is **not** an
+inference runtime, a benchmark leaderboard, or an automatic upstream patch bot.
 
 Why it exists: optimization claims are only worth as much as the evidence behind
 them. StrixLab exists to make experiments reproducible, to keep correctness gates
@@ -37,12 +38,36 @@ A clean checkout provides a strict, evidence-oriented CLI:
   runs into one immutable comparison run with a conservative, non-scoring
   verdict (`compare`).
 
+### Bounded profile-guided campaigns
+
+A campaign is a local, finite investigation of reviewed source patches against
+one frozen evaluator (suite, machine, source, build, model, and comparison
+policy). The controller freezes a plan, screens candidates, and requires a
+fresh confirmation before retain or reject. Failed and inconclusive findings
+stay in the record. Campaigns do not replace the evidence CLI, do not open
+upstream pull requests, and do not require ROCm 10.
+
+See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure and v1
+commands, and
+[`docs/research-problems.md`](docs/research-problems.md)
+("Profile-guided llama.cpp research problems") for the ranked hypothesis
+portfolio. Hardware campaign execution is later; do not treat the command
+examples as a live experiment.
+
+```bash
+uv run strixlab campaign create path/to/plan.yaml
+uv run strixlab campaign inspect "$CAMPAIGN_ID"
+# resume evaluates remaining phases on hardware later; create only freezes.
+```
+
 ### What does not exist yet
 
 - No web service, official judge, leaderboard, score, or "winning solution".
 - No model downloader; you must obtain the pinned GGUF yourself and keep it
   outside the repository.
-- No upstream pull-request bot; StrixLab never pushes changes or opens PRs.
+- No automatic upstream patch bot; StrixLab never pushes runtime changes or
+  opens upstream pull requests. A retain decision is local evidence, not a PR.
+- No fabricated campaign measurements; GPU execution of campaigns is later.
 
 Community experiments (see below) are locally executed, reviewable
 investigations—not remotely executed submissions or official scores.
@@ -188,6 +213,9 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
+- **Campaign problems** — bounded optimization hypotheses belong in
+  [`docs/research-problems.md`](docs/research-problems.md); the controller
+  procedure is [`docs/autoresearch.md`](docs/autoresearch.md).
 - **Scenarios** — propose a stable benchmark question in an Issue, then add its
   checked-in suite and supporting configs in a scenario PR.
 - **Experiments** — propose one reproducible candidate in a PR and collect
