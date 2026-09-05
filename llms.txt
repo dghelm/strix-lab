@@ -19,32 +19,40 @@ Read `docs/autoresearch.md` before adding campaign plans or interpreting
 campaign JSON. The ranked hypothesis list is `docs/research-problems.md`.
 
 A campaign is a local, finite investigation of reviewed patches against one
-frozen evaluator. The required loop is: hypothesis → fixed evaluator → patch →
-screen → fresh confirmation → retain/reject → next campaign. Screening is
-exploration only. Confirmation must use new baseline and candidate runs, not
-the screening evidence. Keep failed, negative, and inconclusive findings.
+strict frozen evaluator. The required loop is: hypothesis → fixed evaluator →
+patch → screen → fresh independent confirmation → retain/reject → next
+campaign. Screening is exploration only. Confirmation must use new baseline and
+candidate runs, not the screening evidence. Calibration is two distinct
+baseline/baseline no-op suites, not a candidate comparison. Keep failed,
+negative, inconclusive, and interrupted findings.
 
-v1 commands:
+Interrupted phases stay spent: resume never replays unknown running work;
+further attempts require a new campaign. `max_suite_runs` is a count budget
+that includes calibration, screening, confirmation, failures, and interrupted
+reservations. It is an admission check, not a wall-clock deadline.
+
+v1 commands (controller surface; README examples wait on the checked-in CLI):
 
 ```bash
 uv run strixlab campaign create path/to/plan.yaml
 uv run strixlab campaign inspect "$CAMPAIGN_ID"
+uv run strixlab campaign report "$CAMPAIGN_ID"
 uv run strixlab campaign resume "$CAMPAIGN_ID"
 ```
 
 `create` freezes the plan and does not run suites. `resume` evaluates remaining
 phases and is hardware work for later; do not run GPU campaigns, download
 models, or provision ROCm as part of scaffold documentation. `inspect` prints
-canonical JSON state from `<home>/campaigns/<id>/state.json`. There is no
-exploration-versus-confirmation flag, no automatic upstream push, and no ROCm
-10 prerequisite.
+canonical JSON state from `<home>/campaigns/<id>/state.json`. `report` renders
+Markdown from that verified state. There is no exploration-versus-confirmation
+flag, no automatic upstream push, and no ROCm 10 prerequisite.
 
 Preserve the raw judge verdict, including `mixed`. A campaign
 `objective_met_provisional` label is not judge improvement and not
 `best-known`. Do not invent extra campaign flags, treat mixed or inconclusive
-as a win, reuse screening runs as confirmation, relax `objective_cases` or the
-protected-regression margin after screening, or open a pull request because a
-candidate was retained.
+as a win, reuse screening runs as confirmation, retry a spent interrupted
+attempt in place, relax `objective_cases` or the protected-regression margin
+after screening, or open a pull request because a candidate was retained.
 
 ## Planned scenarios
 

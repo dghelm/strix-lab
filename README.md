@@ -41,24 +41,21 @@ A clean checkout provides a strict, evidence-oriented CLI:
 ### Bounded profile-guided campaigns
 
 A campaign is a local, finite investigation of reviewed source patches against
-one frozen evaluator (suite, machine, source, build, model, and comparison
-policy). The controller freezes a plan, screens candidates, and requires a
-fresh confirmation before retain or reject. Failed and inconclusive findings
-stay in the record. Campaigns do not replace the evidence CLI, do not open
-upstream pull requests, and do not require ROCm 10.
+one strict frozen evaluator (suite, machine, source, build, model, and
+comparison policy). The controller freezes a plan, screens candidates, and
+requires a fresh independent confirmation before retain or reject. Calibration
+is two distinct baseline/baseline runs. Interrupted attempts stay spent. The
+suite-run budget counts calibration, confirmation, failures, and interruptions
+and is not a wall-clock deadline. Failed and inconclusive findings stay in the
+record. Campaigns do not replace the evidence CLI, do not open upstream pull
+requests, and do not require ROCm 10.
 
-See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure and v1
-commands, and
-[`docs/research-problems.md`](docs/research-problems.md)
+See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure, frozen
+evaluator, spent-interrupt and count-budget rules, and the controller command
+surface. Executable README command examples wait on the checked-in campaign
+CLI. See [`docs/research-problems.md`](docs/research-problems.md)
 ("Profile-guided llama.cpp research problems") for the ranked hypothesis
-portfolio. Hardware campaign execution is later; do not treat the command
-examples as a live experiment.
-
-```bash
-uv run strixlab campaign create path/to/plan.yaml
-uv run strixlab campaign inspect "$CAMPAIGN_ID"
-# resume evaluates remaining phases on hardware later; create only freezes.
-```
+portfolio. Hardware campaign execution is later.
 
 ### What does not exist yet
 
