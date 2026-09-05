@@ -253,6 +253,51 @@ Synthetic fixtures establish grammar behavior only. Prefix inventory, privileged
 metadata auditing, real artifact authenticity, installation location approval
 and runtime isolation remain separate unresolved work.
 
+### Metadata observation slice (unqualified)
+
+`strixlab.rocm_metadata.observe_inode_metadata(parent_fd, name)` observes stored
+xattr **names only** for one regular file, directory or symlink beneath a
+caller-held directory descriptor. The leaf must encode as UTF-8 in at most 255
+bytes, with no slash, NUL, or dot/dot-dot leaf. Its completed
+`InodeMetadataObservationV1`
+always reports `coverage: unknown`. It has no qualification, metadata-admission,
+installation or activation API, and no existing lifecycle path calls it.
+A completed probe, including an empty name list, does not establish absence in
+all namespaces or satisfy the privileged metadata-audit requirements below.
+
+The Linux native x86_64 adapter uses `listxattrat` syscall **465**, whose ABI is
+`(int dirfd, const char *path, unsigned int flags, char *list, size_t size)`, with
+`AT_SYMLINK_NOFOLLOW` (`0x100`). The ABI is recorded in upstream Linux
+[v7.1.8 syscall table](https://github.com/gregkh/linux/blob/v7.1.8/arch/x86/entry/syscalls/syscall_64.tbl)
+and [implementation](https://github.com/gregkh/linux/blob/v7.1.8/fs/xattr.c).
+Native 64-bit pointer/long/size_t, platform and required-open-flag checks precede
+calls. Other ABIs fail closed; a missing kernel syscall produces a distinct
+`unsupported` observation with raw `ENOSYS`. No libc `listxattrat` symbol is
+assumed. Symlink probes address a single leaf relative to the held parent;
+`O_PATH` is used only to retain stat identity, never as an xattr I/O descriptor.
+
+The probe duplicates the parent FD and brackets each observation with parent
+and leaf stat identities, including the final no-follow leaf-name binding.
+Observed changes raise a bounded error without returning a completed report.
+The caller's parent descriptor is the authority: this function does not verify
+its original pathname, ancestor containment, mount isolation or ownership
+admission. A held descriptor does not freeze directory entries, and brackets
+cannot exclude a hostile same-UID writer or changes after observation.
+
+Name storage is capped at 64 KiB before buffer allocation, with at most one
+retry for `ERANGE`. Reports distinguish observed names, malformed results,
+resource limits, unsupported operations and errors; raw errno is retained.
+`ENODATA`, access denial, unsupported operations and size failures never become
+an empty observation. Names are UTF-8-independent bytes, sorted by bytes and
+rendered as lowercase hex escapes; no xattr values are read. Synthetic tests
+cover these semantics. Explicitly labeled live support tests may skip on older
+kernels; neither their success nor a skip is host/backend qualification.
+
+A future qualification requires separately reviewed seeded evidence and exact
+backend, environment, namespace, credential and policy assumptions. Neither
+`uname` nor empty user-visible lists suffice. This slice supplies no production
+path to create or attach such a qualification and changes no activation gate.
+
 ### Extraction and copy contract
 
 The future, separately reviewed implementation must be descriptor anchored and
