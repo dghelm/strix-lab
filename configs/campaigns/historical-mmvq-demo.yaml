@@ -1,0 +1,18 @@
+# Harness demonstration using a historical candidate, NOT a promising optimization.
+# create is CPU-only. resume performs builds and real model/GPU execution and must
+# only be invoked when the operator intends to run the pinned hardware scenario.
+schema_version: 1
+id: historical-mmvq-demo
+suite: ../suites/smoke-qwen35.yaml
+machine: ../machines/strix-halo-128g.yaml
+source: ../sources/strix-llama.yaml
+build: ../builds/hip-rocm-gfx1151.yaml
+model: ../models/qwen35-4b-smoke.yaml
+candidates:
+  - id: historical-q4k-nwarps2
+    patches:
+      - ../../experiments/smoke-qwen35/rdna35-mmvq-q4k-nwarps2/patches/mmvq-rdna35-q4k-nwarps2.patch
+max_candidates: 1
+max_suite_runs: 10
+# Omitted objective_cases means every performance case must improve.
+protected_regression_margin_percent: 0
