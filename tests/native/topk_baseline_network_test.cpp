@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <cassert>
 #include <cstdint>
+#include <iostream>
 #include <vector>
 
 // Mirrors ggml/src/ggml-cuda/argsort.cu at the pinned source:
@@ -32,8 +32,11 @@ static std::vector<int> pinned_descending_equal_indices(int n) {
 int main() {
   const auto result = pinned_descending_equal_indices(11);
   const std::vector<int> expected{0, 1, 2, 3, 4, 5, 6, 7, 10, 8, 9};
-  assert(result == expected);
-  assert(std::vector<int>(result.begin(), result.begin() + 10) ==
-         std::vector<int>({0, 1, 2, 3, 4, 5, 6, 7, 10, 8}));
+  const std::vector<int> expected_top10{0, 1, 2, 3, 4, 5, 6, 7, 10, 8};
+  if (result != expected ||
+      std::vector<int>(result.begin(), result.begin() + 10) != expected_top10) {
+    std::cerr << "pinned bitonic network regression\n";
+    return 1;
+  }
   return 0;
 }

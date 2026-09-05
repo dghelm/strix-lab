@@ -7,6 +7,8 @@ from `halo-box/strix-llama.cpp` at commit
 values are in `provenance.json`. The repository MIT license is retained.
 
 This is source and conformance evidence, not a production target or manifest.
+The repository's CMake has a host-only regression-test target for the network;
+it does not define a GPU baseline target or launch path.
 The HIP preprocessor disables `GGML_CUDA_USE_CUB`, so the active path is the
 single all-row bitonic launch in `top-k.cu` followed by one 2-D device copy.
 Capability admission remains `columns <= 1024`; larger TOPK v1 shapes are
@@ -23,6 +25,6 @@ simulation, never GPU evidence.
 If an existing ROCm 7.2.4 `hipcc` is available, a future read-only check may
 compile this source boundary with the exact command, compiler version, and
 preprocessor defines recorded as control-toolchain evidence. That check must not
-launch a kernel or imply ROCm 10/gfx1151 support. No CMake target, provider
+launch a kernel or imply ROCm 10/gfx1151 support. No GPU CMake target, provider
 registry, scenario manifest, value gathering, NaN preflight, or tie repair is
 defined here.
