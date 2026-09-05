@@ -113,8 +113,11 @@ control must remain untouched.
 
 ### Archive admission contract
 
-The archive parser, accepted-member manifest, extractor, and prefix verifier do
-not exist in this branch. Their separate review must enforce all of these rules:
+The host-only `strixlab.rocm_archive` reader and its structural member manifest
+implement the narrow grammar below. The extractor and prefix verifier do not
+exist. Structural admission does not authenticate an SDK, authorize extraction,
+or clear either activation gate. The complete preparation path must enforce all
+of these rules:
 
 1. Bind review and extraction to the same exact tarball bytes: the bytes covered
    by the vendor anchor or explicit risk acceptance and by the retained
@@ -161,6 +164,94 @@ not exist in this branch. Their separate review must enforce all of these rules:
    chmod a symlink. Reject archive metadata for file capabilities, xattrs, or
    ACLs. Treat archived UID, GID, user name, and group name as untrusted metadata
    that must never be restored.
+
+### ROCM10-VERIFY-A structural wire grammar, v1
+
+This is a deliberately narrow POSIX ustar grammar, frozen against synthetic
+byte-built fixtures rather than inferred from `tarfile` acceptance. The actual
+SDK archive has not been retrieved or tested against it. An unsupported archive
+is a negative result requiring review, never permission to fall back to another
+parser. There is no extraction, network, provenance-acceptance or CLI operation.
+
+`inspect_archive(directory_fd, name)` reads one regular file through an already
+held directory descriptor; `name` must be a single nonempty component other than
+`.` or `..`. The leaf is opened no-follow/nonblocking and checked against its
+pre-open identity. Size, identity, mode, ownership, link count and nanosecond
+mtime/ctime are compared before/after reading, including the final directory
+entry. Observed change, unreadable input or premature EOF fails. This detects
+observed drift; it is not a filesystem snapshot or vendor authentication.
+
+- **Gzip:** exactly one DEFLATE gzip member. Validate gzip framing, reserved
+  flags, optional-header framing/checksum when present, CRC32 and ISIZE. Optional
+  extra/name/comment data are inert and not retained. Reject a second member or
+  any compressed suffix, including zeros. Use at most 64 KiB compressed reads
+  and 64 KiB decompressor output per call. Count **all** expanded bytes, including
+  headers, member padding and terminal zeros, against `64 * compressed_size`.
+  Compressed size is the opened file's snapshotted size, not a running denominator.
+- **Header:** exactly 512 bytes; magic bytes 257–262 are `ustar` followed by NUL,
+  version bytes 263–264 are ASCII `00`, and bytes 500–511 are zero. No GNU magic,
+  base-256 numbers, PAX/global headers, sparse markers or vendor extensions.
+- **Octal fields:** mode, UID, GID, size and mtime contain optional leading ASCII
+  spaces, then one or more ASCII octal digits (leading zeros allowed), then a
+  nonempty suffix containing only NUL and/or ASCII spaces. Reject empty/all-NUL
+  fields, signs, other whitespace, non-octal digits and unterminated full-width
+  numbers. Field width still bounds representable values: an 11-digit ustar size
+  cannot represent the policy's inclusive 8 GiB upper bound. Device-major/minor
+  fields must be all zero bytes or an accepted octal spelling of zero.
+- **Checksum:** bytes 148–155 are exactly six ASCII octal digits, NUL, space.
+  Compare with the unsigned-byte sum of the complete header while treating those
+  eight checksum bytes as ASCII spaces. Other checksum padding/termination and
+  signed checksums are rejected.
+- **Text fields:** name, linkname, prefix, uname and gname either fill their field
+  without NUL or terminate at the first NUL with only zero bytes afterward.
+  Decode strict UTF-8/NFC; reject Unicode category `C*` and backslashes. Name is
+  nonempty; join a nonempty prefix to it with one `/`, then apply the path policy
+  above. UID/GID/mtime/uname/gname are validated but never applied as metadata.
+- **Types:** only ASCII `0` or NUL (regular file), ASCII `5` (directory), and ASCII
+  `2` (symlink). Non-symlinks have an empty linkname. Directories and symlinks have
+  zero payload size. Regular-file payload bytes are arbitrary; their padding to
+  the next 512-byte header must be zero. The first zero header requires a second
+  zero header immediately; all subsequent expanded bytes are zero and the total
+  expanded length is a multiple of 512. Even an empty archive needs both headers.
+- **Topology:** explicit directory parents may occur before or after children.
+  Validate the complete topology before returning a manifest. Reject duplicate
+  normalized paths, missing parents and entries beneath regular files/symlinks.
+  Symlink targets are validated **lexically only**: a canonical relative target
+  must remain inside the archive root when joined to its parent. A target of `.`
+  may name its parent, and leading `..` is allowed only when the joined path stays
+  inside. Dangling targets and cycles can pass this lexical check; it does not
+  establish resolved-prefix safety and must never authorize link traversal.
+
+Fixed archive limits remain 1,000,000 members, 8 GiB per regular file, 32 GiB
+aggregate regular payload and 64:1 expansion. Additionally, this implementation
+admits at most **64 MiB of canonical per-entry JSON metadata**, charged before
+retaining each entry; exceeding it is a resource failure, not a different parser
+or relaxed policy. This bounds retained entry count/text as well as the archive
+member limit; it is not a promise that Python process RSS is 64 MiB. Payloads,
+terminal padding and gzip optional strings are streamed, never retained in the
+manifest. No caller-supplied resource-limit overrides are accepted.
+
+The manifest records version/parser ID, `validation: complete`, `admission: structural-only`,
+`symlink_validation: lexical-only`, observed compressed SHA-256/size, expanded
+size, regular-payload bytes, member count and entries sorted by UTF-8 path bytes.
+Each entry records archive ordinal, byte offset of its expanded header, type,
+mode, payload size, normalized path and lowercase `\xhh` escapes for every UTF-8
+byte, plus a file digest or link target/escaped target as applicable. It invents
+no filesystem link counts, ownership audit, tree digest or approval field.
+Existing canonical JSON serialization is reused. Structural admission and
+observed hashes cannot be promoted to accepted AMD provenance by a caller field.
+
+One internal event iterator owns header/payload/padding/topology interpretation.
+Every start, data chunk and end event explicitly carries `validation: provisional`;
+the iterator never emits an admitted manifest, even on exhaustion. Only
+`inspect_archive` returns `validation: complete` after gzip completion, tar
+termination, final topology and descriptor stability checks. This is completed
+structural inspection, not provenance acceptance. A future extractor must reuse
+that interpretation, bind the exact reviewed archive and manifest bytes, and
+revalidate them; the current slice neither provides nor authorizes an extractor.
+Synthetic fixtures establish grammar behavior only. Prefix inventory, privileged
+metadata auditing, real artifact authenticity, installation location approval
+and runtime isolation remain separate unresolved work.
 
 ### Extraction and copy contract
 
