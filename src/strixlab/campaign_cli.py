@@ -2,58 +2,32 @@
 
 from __future__ import annotations
 
-import importlib
 import os
-from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any, NoReturn
+from typing import Annotated, NoReturn
 
 import typer
 
+from strixlab.campaigns import (
+    CampaignState,
+    create_campaign,
+    inspect_campaign,
+    render_campaign_report,
+    resume_campaign,
+)
 from strixlab.paths import resolve_home
 from strixlab.secret_policy import RedactionContext
 from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 
 _SUCCESS_STATUSES = frozenset({"completed", "ready"})
-_DOMAIN_ERRORS = (OSError, TypeError, ValueError, ImportError)
+_DOMAIN_ERRORS = (OSError, TypeError, ValueError)
 
 campaign_app = typer.Typer(
     help="Create, resume, inspect, and report bounded profile-guided campaigns.",
     no_args_is_help=True,
     pretty_exceptions_show_locals=False,
 )
-
-
-def _core() -> Any:
-    return importlib.import_module("strixlab.campaigns")
-
-
-def create_campaign(plan_path: Path, *, home: Path, environ: Mapping[str, str]) -> Any:
-    """Delegate to the core freeze-only campaign constructor."""
-
-    return _core().create_campaign(plan_path, home=home, environ=environ)
-
-
-def resume_campaign(campaign_id: str, *, home: Path, environ: Mapping[str, str]) -> Any:
-    """Delegate to the core bounded campaign resume."""
-
-    return _core().resume_campaign(campaign_id, home=home, environ=environ)
-
-
-def inspect_campaign(campaign_id: str, *, home: Path) -> Any:
-    """Delegate to the core campaign inspector."""
-
-    return _core().inspect_campaign(campaign_id, home=home)
-
-
-def render_campaign_report(state: Any) -> str:
-    """Delegate to the core human-readable campaign report renderer."""
-
-    report = _core().render_campaign_report(state)
-    if not isinstance(report, str):
-        raise TypeError("campaign report renderer must return str")
-    return report
 
 
 def _terminal_context() -> tuple[dict[str, str], RedactionContext]:
@@ -81,21 +55,15 @@ def _fail(prefix: str, exc: BaseException, context: RedactionContext) -> NoRetur
     raise typer.Exit(code=1) from None
 
 
-def _status_of(state: Any) -> str:
-    status = getattr(state, "status", "")
-    value = getattr(status, "value", status)
-    return str(value)
-
-
 def _exit_for_status(status: str) -> None:
     if status not in _SUCCESS_STATUSES:
         raise typer.Exit(code=1)
 
 
-def _print_state(state: Any, context: RedactionContext) -> None:
+def _print_state(state: CampaignState, context: RedactionContext) -> None:
     payload = state.model_dump(mode="json")
     _campaign_echo(canonical_json_bytes(payload).decode(), context, nl=False)
-    _exit_for_status(_status_of(state))
+    _exit_for_status(state.status)
 
 
 @campaign_app.command("create")
@@ -188,4 +156,4 @@ def campaign_report(
         _fail("campaign report failed", exc, context)
     text = report if report.endswith("\n") else f"{report}\n"
     _campaign_echo(text, context, nl=False)
-    _exit_for_status(_status_of(state))
+    _exit_for_status(state.status)

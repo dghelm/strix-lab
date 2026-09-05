@@ -11,25 +11,21 @@ import pytest
 from typer.testing import CliRunner
 
 import strixlab.campaign_cli as campaign_cli
+from strixlab.campaigns import CampaignError, CampaignPhase, CampaignState
 from strixlab.cli import app
 from strixlab.secret_policy import UnsafeOutputError
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-
-class CampaignError(ValueError):
-    """Test double matching the core CampaignError(ValueError) contract."""
-
-
-class FakeState:
-    def __init__(self, status: str, payload: dict[str, Any] | None = None) -> None:
-        self.status = status
-        self.payload = payload or {}
-
-    def model_dump(self, *, mode: str) -> dict[str, Any]:
-        assert mode == "json"
-        return {"status": self.status, **self.payload}
+_CORE_DIGEST = "a" * 64
+_CORE_STATUSES = (
+    ("ready", 0),
+    ("completed", 0),
+    ("running", 1),
+    ("blocked", 1),
+    ("interrupted", 1),
+    ("budget_exhausted", 1),
+)
 
 
 def _plain(value: str) -> str:
@@ -38,6 +34,18 @@ def _plain(value: str) -> str:
 
 def _invoke(args: list[str], *, env: dict[str, str] | None = None) -> Any:
     return runner.invoke(app, args, env=env)
+
+
+def _state(**overrides: Any) -> CampaignState:
+    values: dict[str, Any] = {
+        "id": "campaign-fixture",
+        "frozen_sha256": _CORE_DIGEST,
+        "status": "ready",
+        "reason": "created; no execution admitted",
+        "max_suite_runs": 10,
+    }
+    values.update(overrides)
+    return CampaignState(**values)
 
 
 def test_campaign_cli_surface() -> None:
@@ -81,12 +89,9 @@ def test_create_prints_canonical_json_and_forwards_arguments(
     plan.write_text("schema_version: 1\n", encoding="utf-8")
     home = tmp_path / "home"
     captured: dict[str, Any] = {}
-    state = FakeState(
-        "ready",
-        {"campaign_id": "campaign-fixture", "candidates": []},
-    )
+    state = _state()
 
-    def fake_create(plan_path: Path, *, home: Path, environ: Any) -> FakeState:
+    def fake_create(plan_path: Path, *, home: Path, environ: Any) -> CampaignState:
         captured.update(plan_path=plan_path, home=home, environ=dict(environ))
         return state
 
@@ -94,8 +99,7 @@ def test_create_prints_canonical_json_and_forwards_arguments(
     result = _invoke(["campaign", "create", str(plan), "--home", str(home)])
 
     assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload == {"campaign_id": "campaign-fixture", "candidates": [], "status": "ready"}
+    assert json.loads(result.stdout) == state.model_dump(mode="json")
     assert captured["plan_path"] == plan
     assert captured["home"] == home
     assert isinstance(captured["environ"], dict)
@@ -104,19 +108,23 @@ def test_create_prints_canonical_json_and_forwards_arguments(
 def test_resume_completed_with_failed_candidates_exits_zero(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = FakeState(
-        "completed",
-        {
-            "campaign_id": "campaign-fixture",
-            "candidates": [
-                {"id": "candidate-a", "status": "failed"},
-                {"id": "candidate-b", "status": "retained"},
-            ],
-        },
+    state = _state(
+        status="completed",
+        reason="finite candidate list evaluated",
+        phases=[
+            CampaignPhase(
+                candidate_id="candidate-a",
+                phase="screening",
+                reserved_suite_runs=4,
+                status="failed",
+                stage="terminal",
+                decision="objective_not_met",
+            )
+        ],
     )
     captured: dict[str, Any] = {}
 
-    def fake_resume(campaign_id: str, *, home: Path, environ: Any) -> FakeState:
+    def fake_resume(campaign_id: str, *, home: Path, environ: Any) -> CampaignState:
         captured.update(campaign_id=campaign_id, home=home, environ=dict(environ))
         return state
 
@@ -127,7 +135,7 @@ def test_resume_completed_with_failed_candidates_exits_zero(
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["status"] == "completed"
-    assert payload["candidates"][0]["status"] == "failed"
+    assert payload["phases"][0]["status"] == "failed"
     assert captured["campaign_id"] == "campaign-fixture"
     assert captured["home"] == home
 
@@ -136,30 +144,27 @@ def test_resume_completed_with_failed_candidates_exits_zero(
 def test_resume_unsuccessful_status_prints_json_and_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
-    monkeypatch.setattr(
-        campaign_cli,
-        "resume_campaign",
-        lambda *_args, **_kwargs: FakeState(status, {"campaign_id": "campaign-fixture"}),
-    )
+    state = _state(status=status, reason=status)
+    monkeypatch.setattr(campaign_cli, "resume_campaign", lambda *_args, **_kwargs: state)
     result = _invoke(["campaign", "resume", "campaign-fixture", "--home", str(tmp_path / "home")])
     assert result.exit_code == 1
-    payload = json.loads(result.stdout)
-    assert payload["status"] == status
+    assert json.loads(result.stdout) == state.model_dump(mode="json")
 
 
 def test_inspect_prints_canonical_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
+    state = _state()
 
-    def fake_inspect(campaign_id: str, *, home: Path) -> FakeState:
+    def fake_inspect(campaign_id: str, *, home: Path) -> CampaignState:
         captured.update(campaign_id=campaign_id, home=home)
-        return FakeState("ready", {"campaign_id": campaign_id})
+        return state
 
     monkeypatch.setattr(campaign_cli, "inspect_campaign", fake_inspect)
     home = tmp_path / "home"
     result = _invoke(["campaign", "inspect", "campaign-fixture", "--home", str(home)])
 
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == {"campaign_id": "campaign-fixture", "status": "ready"}
+    assert json.loads(result.stdout) == state.model_dump(mode="json")
     assert captured == {"campaign_id": "campaign-fixture", "home": home}
     assert "environ" not in captured
 
@@ -168,11 +173,8 @@ def test_inspect_prints_canonical_json(tmp_path: Path, monkeypatch: pytest.Monke
 def test_inspect_non_success_status_prints_json_and_exits_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
 ) -> None:
-    monkeypatch.setattr(
-        campaign_cli,
-        "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState(status, {"id": "campaign-fixture"}),
-    )
+    state = _state(status=status, reason=status)
+    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_args, **_kwargs: state)
     result = _invoke(["campaign", "inspect", "campaign-fixture", "--home", str(tmp_path / "home")])
     assert result.exit_code == 1
     assert json.loads(result.stdout)["status"] == status
@@ -181,48 +183,29 @@ def test_inspect_non_success_status_prints_json_and_exits_one(
 def test_inspect_forwards_core_campaign_state_fields(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    payload = {
-        "schema_version": 1,
-        "id": "historical-mmvq-demo",
-        "frozen_sha256": "a" * 64,
-        "status": "ready",
-        "reason": "created; no execution admitted",
-        "max_suite_runs": 10,
-        "reserved_suite_runs": 0,
-        "objective_cases": ["pp512", "tg128"],
-        "protected_regression_margin_percent": 0.0,
-        "baseline": None,
-        "phases": [],
-    }
-    monkeypatch.setattr(
-        campaign_cli,
-        "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState("ready", payload),
+    state = _state(
+        id="historical-mmvq-demo",
+        objective_cases=["pp512", "tg128"],
     )
+    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_args, **_kwargs: state)
     result = _invoke(
         ["campaign", "inspect", "historical-mmvq-demo", "--home", str(tmp_path / "home")]
     )
     assert result.exit_code == 0
-    assert json.loads(result.stdout) == payload
+    assert json.loads(result.stdout) == state.model_dump(mode="json")
 
 
 def test_report_prints_human_readable_actionable_text(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = FakeState(
-        "completed",
-        {
-            "campaign_id": "campaign-fixture",
-            "candidates": [{"id": "candidate-a", "status": "failed"}],
-        },
-    )
+    state = _state(status="completed", reason="finite candidate list evaluated")
     captured: dict[str, Any] = {}
 
-    def fake_inspect(campaign_id: str, *, home: Path) -> FakeState:
+    def fake_inspect(campaign_id: str, *, home: Path) -> CampaignState:
         captured["inspect"] = {"campaign_id": campaign_id, "home": home}
         return state
 
-    def fake_render(rendered: FakeState) -> str:
+    def fake_render(rendered: CampaignState) -> str:
         captured["state"] = rendered
         return (
             "Campaign campaign-fixture is completed.\n"
@@ -244,10 +227,10 @@ def test_report_prints_human_readable_actionable_text(
 def test_report_prints_core_renderer_comparison_details(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = FakeState("completed", {"id": "campaign-fixture"})
+    state = _state(status="completed", reason="finite candidate list evaluated")
     monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
 
-    def fake_render(rendered: FakeState) -> str:
+    def fake_render(rendered: CampaignState) -> str:
         assert rendered is state
         return (
             "# Campaign campaign-fixture\n"
@@ -267,7 +250,7 @@ def test_report_budget_exhausted_exits_one(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(
         campaign_cli,
         "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState("budget_exhausted"),
+        lambda *_args, **_kwargs: _state(status="budget_exhausted", reason="budget exhausted"),
     )
     monkeypatch.setattr(
         campaign_cli,
@@ -329,7 +312,7 @@ def test_create_missing_plan_path_is_secret_safe(
     secret = "supersecretvalue"
     missing = tmp_path / secret / "plan.yaml"
 
-    def fake_create(plan_path: Path, *, home: Path, environ: Any) -> FakeState:
+    def fake_create(plan_path: Path, *, home: Path, environ: Any) -> CampaignState:
         raise FileNotFoundError(f"plan not found: {plan_path}")
 
     monkeypatch.setattr(campaign_cli, "create_campaign", fake_create)
@@ -350,7 +333,7 @@ def test_json_payload_secret_fails_closed(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(
         campaign_cli,
         "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState("ready", {"note": secret}),
+        lambda *_args, **_kwargs: _state(reason=secret),
     )
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", secret)
     result = _invoke(
@@ -368,7 +351,7 @@ def test_report_secret_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         campaign_cli,
         "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState("completed"),
+        lambda *_args, **_kwargs: _state(status="completed", reason="completed"),
     )
     monkeypatch.setattr(
         campaign_cli,
@@ -440,35 +423,11 @@ def test_relative_home_exits_one_without_leaking_secret(
     )
 
 
-_CORE_DIGEST = "a" * 64
-_CORE_STATUSES = (
-    ("ready", 0),
-    ("completed", 0),
-    ("running", 1),
-    ("blocked", 1),
-    ("interrupted", 1),
-    ("budget_exhausted", 1),
-)
-
-
-def _core_state(**overrides: Any) -> Any:
-    campaigns = pytest.importorskip("strixlab.campaigns")
-    values: dict[str, Any] = {
-        "id": "campaign-fixture",
-        "frozen_sha256": _CORE_DIGEST,
-        "status": "ready",
-        "reason": "created; no execution admitted",
-        "max_suite_runs": 10,
-    }
-    values.update(overrides)
-    return campaigns.CampaignState(**values)
-
-
 @pytest.mark.parametrize(("status", "exit_code"), _CORE_STATUSES)
 def test_inspect_real_campaign_state_status_exit_codes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str, exit_code: int
 ) -> None:
-    state = _core_state(status=status, reason="fixture")
+    state = _state(status=status, reason="fixture")
     monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
     with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
         result = _invoke(
@@ -477,9 +436,8 @@ def test_inspect_real_campaign_state_status_exit_codes(
         )
     assert result.exit_code == exit_code
     payload = json.loads(result.stdout)
-    assert payload["id"] == "campaign-fixture"
+    assert payload == state.model_dump(mode="json")
     assert payload["status"] == status
-    assert payload["frozen_sha256"] == _CORE_DIGEST
     assert payload["phases"] == []
     assert payload["objective_cases"] == []
     assert payload["protected_regression_margin_percent"] == 0.0
@@ -489,7 +447,7 @@ def test_inspect_real_campaign_state_status_exit_codes(
 def test_report_uses_exported_render_campaign_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    state = _core_state()
+    state = _state()
     monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
     with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
         result = _invoke(
@@ -503,8 +461,7 @@ def test_report_uses_exported_render_campaign_report(
     assert "Objective cases:" in result.stdout
 
 
-def test_inspect_unknown_id_uses_core_when_available(tmp_path: Path) -> None:
-    pytest.importorskip("strixlab.campaigns")
+def test_inspect_unknown_id_uses_core(tmp_path: Path) -> None:
     home = tmp_path / "home"
     with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
         result = _invoke(
@@ -516,8 +473,7 @@ def test_inspect_unknown_id_uses_core_when_available(tmp_path: Path) -> None:
     assert "campaign-does-not-exist" not in result.stdout
 
 
-def test_create_invalid_plan_uses_core_when_available(tmp_path: Path) -> None:
-    pytest.importorskip("strixlab.campaigns")
+def test_create_invalid_plan_uses_core(tmp_path: Path) -> None:
     plan = tmp_path / "plan.yaml"
     plan.write_text("schema_version: 1\nid: INVALID\n", encoding="utf-8")
     with mock.patch.dict(os.environ, {"PATH": "/usr/bin"}, clear=True):
@@ -528,70 +484,3 @@ def test_create_invalid_plan_uses_core_when_available(tmp_path: Path) -> None:
     assert result.exit_code == 1
     assert "campaign create failed" in result.stderr
     assert "INVALID" not in result.stdout
-
-
-def test_wrappers_delegate_to_core_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import sys
-    import types
-
-    calls: dict[str, Any] = {}
-    state = FakeState("ready", {"campaign_id": "campaign-core"})
-
-    def fake_create(plan_path: Path, *, home: Path, environ: Any) -> FakeState:
-        calls["create"] = {"plan_path": plan_path, "home": home, "environ": dict(environ)}
-        return state
-
-    def fake_resume(campaign_id: str, *, home: Path, environ: Any) -> FakeState:
-        calls["resume"] = {"campaign_id": campaign_id, "home": home, "environ": dict(environ)}
-        return state
-
-    def fake_inspect(campaign_id: str, *, home: Path) -> FakeState:
-        calls["inspect"] = {"campaign_id": campaign_id, "home": home}
-        return state
-
-    def fake_render(rendered: FakeState) -> str:
-        calls["report"] = rendered
-        return "ok\n"
-
-    module = types.ModuleType("strixlab.campaigns")
-    module.create_campaign = fake_create  # type: ignore[attr-defined]
-    module.resume_campaign = fake_resume  # type: ignore[attr-defined]
-    module.inspect_campaign = fake_inspect  # type: ignore[attr-defined]
-    module.render_campaign_report = fake_render  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "strixlab.campaigns", module)
-
-    plan = tmp_path / "plan.yaml"
-    home = tmp_path / "home"
-    environ = {"PATH": "/usr/bin"}
-    assert campaign_cli.create_campaign(plan, home=home, environ=environ) is state
-    assert campaign_cli.resume_campaign("campaign-core", home=home, environ=environ) is state
-    assert campaign_cli.inspect_campaign("campaign-core", home=home) is state
-    assert campaign_cli.render_campaign_report(state) == "ok\n"
-    assert calls["create"] == {"plan_path": plan, "home": home, "environ": environ}
-    assert calls["resume"]["campaign_id"] == "campaign-core"
-    assert calls["inspect"] == {"campaign_id": "campaign-core", "home": home}
-    assert calls["report"] is state
-    module.render_campaign_report = lambda _state: None  # type: ignore[attr-defined]
-    with pytest.raises(TypeError, match="must return str"):
-        campaign_cli.render_campaign_report(state)
-
-
-def test_status_enum_value_is_used_for_exit_code(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class Status:
-        value = "ready"
-
-        def __str__(self) -> str:
-            return "CampaignStatus.ready"
-
-    class EnumState:
-        status = Status()
-
-        def model_dump(self, *, mode: str) -> dict[str, str]:
-            return {"status": "ready"}
-
-    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: EnumState())
-    result = _invoke(["campaign", "inspect", "campaign-fixture", "--home", str(tmp_path / "home")])
-    assert result.exit_code == 0
-    assert json.loads(result.stdout)["status"] == "ready"
