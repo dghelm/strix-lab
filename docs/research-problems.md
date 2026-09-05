@@ -10,7 +10,7 @@ primitive benchmark need not wait for model downloads.
 
 | Lane | Purpose | Current boundary |
 |---|---|---|
-| ROCm 10 primitives | Compare and improve reusable providers, beginning with stable top-k on gfx1151. | Generic capsule runner, authenticated snapshots, and pure offline comparison exist. Comparison publication/CLI and trusted TOPK implementation remain prerequisites. ROCm 10 is not installed in the expected prefix. No runnable top-k scenario is claimed. |
+| ROCm 10 primitives | Compare and improve reusable providers, beginning with stable top-k on gfx1151. | Generic capsule runner, authenticated snapshots, comparison publication/CLI, and the TOPK host reference exist. Trusted native capsule/provider implementation remains a prerequisite. ROCm 10 is not installed in the expected prefix. No runnable top-k scenario is claimed. |
 | ROCm 7.2.4 integration | Establish whether an optimization helps the pinned model consumer. | Qwen3.5-4B Q4_K_M calibration, PP/TG profiling, and evidence export have executed. A finite-patch model campaign runner is available. |
 
 A ROCm 10 primitive result cannot be compared directly with a ROCm 7.2.4 model
@@ -178,7 +178,11 @@ critical-path fraction when work overlaps. No numerical gain forecast is justifi
 
 ## Kickoff, 2026-09-05
 
-Three Codex workers have separate worktrees and bounded ownership:
+Three Codex workers have separate worktrees and bounded ownership. The first
+iteration's [upstream research cards](primitive-opportunities.md),
+[native host reference](../native/topk/README.md), and capsule-comparison
+publication path have been reviewed and integrated locally. The following table
+records their initial assignments; follow-on work is admitted separately:
 
 | Worker | First iteration | Completion evidence |
 |---|---|---|

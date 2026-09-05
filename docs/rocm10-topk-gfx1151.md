@@ -30,8 +30,10 @@ comparison contract. The boundaries are:
   results and their throughput samples.
 - generic capsule comparison and derived evidence are available through
   `strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID --kind capsule [--home PATH]`;
+- the [native host foundation](../native/topk/README.md) supplies the deterministic
+  input generator, CPU reference, and value/index validator, tested independently;
 - this top-k scenario remains inactive: there is no trusted top-k payload interpreter,
-  provider implementation/registry, correctness reference, or runnable capsule manifest.
+  provider implementation/registry, or runnable capsule manifest.
 
 Forcing top-k through the llama-server adapter would obscure the operation boundary and
 invent model inputs that the capsule does not need. The delivered capsule seam remains
