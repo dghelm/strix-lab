@@ -164,15 +164,46 @@ def test_inspect_prints_canonical_json(tmp_path: Path, monkeypatch: pytest.Monke
     assert "environ" not in captured
 
 
-def test_inspect_blocked_status_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("status", ["blocked", "running"])
+def test_inspect_non_success_status_prints_json_and_exits_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: str
+) -> None:
     monkeypatch.setattr(
         campaign_cli,
         "inspect_campaign",
-        lambda *_args, **_kwargs: FakeState("blocked", {"campaign_id": "campaign-fixture"}),
+        lambda *_args, **_kwargs: FakeState(status, {"id": "campaign-fixture"}),
     )
     result = _invoke(["campaign", "inspect", "campaign-fixture", "--home", str(tmp_path / "home")])
     assert result.exit_code == 1
-    assert json.loads(result.stdout)["status"] == "blocked"
+    assert json.loads(result.stdout)["status"] == status
+
+
+def test_inspect_forwards_core_campaign_state_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "id": "historical-mmvq-demo",
+        "frozen_sha256": "a" * 64,
+        "status": "ready",
+        "reason": "created; no execution admitted",
+        "max_suite_runs": 10,
+        "reserved_suite_runs": 0,
+        "objective_cases": ["pp512", "tg128"],
+        "protected_regression_margin_percent": 0.0,
+        "baseline": None,
+        "phases": [],
+    }
+    monkeypatch.setattr(
+        campaign_cli,
+        "inspect_campaign",
+        lambda *_args, **_kwargs: FakeState("ready", payload),
+    )
+    result = _invoke(
+        ["campaign", "inspect", "historical-mmvq-demo", "--home", str(tmp_path / "home")]
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout) == payload
 
 
 def test_report_prints_human_readable_actionable_text(
@@ -208,6 +239,28 @@ def test_report_prints_human_readable_actionable_text(
     assert "reject candidate-a (failed)" in result.stdout
     assert captured["inspect"] == {"campaign_id": "campaign-fixture", "home": home}
     assert captured["state"] is state
+
+
+def test_report_prints_core_renderer_comparison_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = FakeState("completed", {"id": "campaign-fixture"})
+    monkeypatch.setattr(campaign_cli, "inspect_campaign", lambda *_a, **_k: state)
+
+    def fake_render(rendered: FakeState) -> str:
+        assert rendered is state
+        return (
+            "# Campaign campaign-fixture\n"
+            "Status: completed\n"
+            "Judge: `mixed`; objective met: `false`\n"
+            "- `pp512`: improved; change 1.250%; interval [0.100, 2.400]%\n"
+        )
+
+    monkeypatch.setattr(campaign_cli, "render_campaign_report", fake_render)
+    result = _invoke(["campaign", "report", "campaign-fixture", "--home", str(tmp_path / "home")])
+    assert result.exit_code == 0
+    assert "Judge: `mixed`" in result.stdout
+    assert "`pp512`: improved" in result.stdout
 
 
 def test_report_budget_exhausted_exits_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
