@@ -8,11 +8,14 @@ from typing import Any
 from unittest import mock
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 import strixlab.campaign_cli as campaign_cli
 from strixlab.campaigns import CampaignError, CampaignPhase, CampaignState
 from strixlab.cli import app
+from strixlab.evidence import RunError
+from strixlab.models import ModelError
 from strixlab.secret_policy import UnsafeOutputError
 
 runner = CliRunner()
@@ -295,6 +298,48 @@ def test_inspect_campaign_error_exits_one(tmp_path: Path, monkeypatch: pytest.Mo
     result = _invoke(["campaign", "inspect", "campaign-missing", "--home", str(tmp_path / "home")])
     assert result.exit_code == 1
     assert "campaign inspect failed: unknown campaign ID" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("command", "target", "exc", "needle"),
+    [
+        (
+            ["campaign", "inspect", "campaign-fixture"],
+            "inspect_campaign",
+            RunError("run evidence is corrupt"),
+            "campaign inspect failed: run evidence is corrupt",
+        ),
+        (
+            ["campaign", "resume", "campaign-fixture"],
+            "resume_campaign",
+            ModelError("model receipt drifted"),
+            "campaign resume failed: model receipt drifted",
+        ),
+        (
+            ["campaign", "create", "plan.yaml"],
+            "create_campaign",
+            yaml.YAMLError("mapping values are not allowed"),
+            "campaign create failed: mapping values are not allowed",
+        ),
+    ],
+)
+def test_preflight_runtime_errors_exit_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: list[str],
+    target: str,
+    exc: BaseException,
+    needle: str,
+) -> None:
+    monkeypatch.setattr(
+        campaign_cli,
+        target,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(exc),
+    )
+    result = _invoke([*command, "--home", str(tmp_path / "home")])
+    assert result.exit_code == 1
+    assert needle in result.stderr
+    assert "Traceback" not in result.output
 
 
 def test_create_does_not_use_typer_path_exists_check(tmp_path: Path) -> None:

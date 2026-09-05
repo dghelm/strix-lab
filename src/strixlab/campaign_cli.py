@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Annotated, NoReturn
 
 import typer
+import yaml
 
 from strixlab.campaigns import (
     CampaignState,
@@ -15,13 +16,15 @@ from strixlab.campaigns import (
     render_campaign_report,
     resume_campaign,
 )
+from strixlab.evidence import RunError
+from strixlab.models import ModelError
 from strixlab.paths import resolve_home
 from strixlab.secret_policy import RedactionContext
 from strixlab.secret_policy import UnsafeOutputError as UnsafeDiagnosticError
 from strixlab.serialization import canonical_json_bytes
 
 _SUCCESS_STATUSES = frozenset({"completed", "ready"})
-_DOMAIN_ERRORS = (OSError, TypeError, ValueError)
+_DOMAIN_ERRORS = (OSError, TypeError, ValueError, RunError, ModelError, yaml.YAMLError)
 
 campaign_app = typer.Typer(
     help="Create, resume, inspect, and report bounded profile-guided campaigns.",
