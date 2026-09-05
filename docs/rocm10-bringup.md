@@ -344,6 +344,56 @@ units, 64 KiB queued target components, and 64 MiB charged output evidence. The
 separate link result cannot upgrade the inventory's metadata coverage or admission
 state. This slice has no CLI, SDK execution, extraction, copy, or activation path.
 
+### Synthetic structural quarantine slice (unqualified)
+
+`strixlab.rocm_extract.extract_quarantine(archive_parent_fd, archive_name,
+destination_grandparent_fd, destination_parent_name, quarantine_name)` duplicates
+the caller's descriptors and completes the strict archive inspector before any
+writes. It accepts no caller-supplied manifest. Preflight requires UTF-8 leaf names
+of at most 255 bytes, paths of at most 4096 bytes and 240 components, owner-readable
+final files, and owner-readable/searchable final directories. The selected
+destination parent must be the operator's exact UID/GID and mode `0700`, opened
+through the shared guarded `openat2` helper, with observed-empty metadata names.
+
+The extractor exclusively creates a new mode-`0700` root, immediately captures its
+identity through a guarded `O_PATH` descriptor, and verifies its readable descriptor
+against that identity. It precreates explicit archive directories in parent order,
+then uses the strict parser's provisional event consumer to write regular files in
+bounded chunks. Headers and entries must match the first inspection, and the second
+completed manifest must match canonically, including the compressed archive digest,
+before symlink creation or final modes. Files are initially `0600`; directories are
+initially `0700`. Loss of requested owner permissions at creation fails explicitly,
+even when privileged access would succeed. Normalization and final modes use held
+file descriptors, with directory final modes applied in postorder. The extractor
+does not change the process umask or chmod by pathname.
+
+All root/descent/reopen/binding opens reuse the prefix helper's fixed no-follow,
+no-mount-crossing policy. Creation uses held parent descriptors and exclusive
+no-follow file creation; symlinks are created last and never traversed. Created
+inode numbers and devices are checked on every directory reopen and at final
+projection. Directory access reopens one bounded chain at a time. Every new/final
+inode must have observed-empty metadata names with matching held/named identities;
+errors, unsupported probes, malformed responses, and known names prevent completion.
+No metadata is stripped. Final prefix inspection must exactly match the archive's
+member set, kinds, modes, operator ownership, file lengths/hashes, literal symlink
+targets and their UTF-8 lengths, and single links for non-directories. The separate
+root stays `0700`. The destination parent's binding, owner, and mode are rechecked
+after writes while allowing the expected directory timestamp changes.
+
+`QuarantineResultV1` contains the archive and inventory only after all checks, with
+scope `structural-quarantine-only`, metadata coverage `unknown`, and link closure
+`not-checked`. Observed-empty names never prove full metadata absence or admission.
+`QuarantineError` reports a bounded reason, the retained leaf name only after mkdir
+succeeds, and its captured device/inode when available. Every post-mkdir failure,
+including cancellation, leaves an incomplete leaf; existing leaves are never
+adopted, replaced, or cleaned up. Caller descriptors remain caller-owned.
+
+This implementation is exercised only with synthetic archives. It does not authorize
+SDK extraction, installation, privileged copying, GPU execution, or activation, and
+makes no fsync/durability promise. Quiescent operator ownership remains a requirement;
+named probes and binding checks do not provide atomic protection against hostile
+same-UID writers, transient mount/ABA replacement, or post-observation mutation.
+
 ### Extraction and copy contract
 
 The future, separately reviewed implementation must be descriptor anchored and
