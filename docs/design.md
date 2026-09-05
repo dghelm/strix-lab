@@ -135,8 +135,9 @@ the accepted scenario unchanged.
 and authenticates this contract. D2b1 adds the pure offline
 `compare_finalized_capsule_runs` boundary: it loads baseline then candidate, applies the
 closed admission projection, computes the directional statistics and verdicts, and returns
-a canonical in-memory report. It does not write evidence, allocate a run, publish a bundle,
-interpret TOPK payloads, or expose comparison CLI dispatch. Reversing the arms intentionally
+a canonical in-memory report. The pure comparator does not write evidence, allocate a run,
+publish a bundle, or interpret TOPK payloads. The separate publication wrapper below
+provides CLI dispatch. Reversing the arms intentionally
 produces a different directional comparison; equal candidate IDs remain legal.
 
 For a coordinate with `n` positionally paired positive finite samples, the mathematical
@@ -290,8 +291,42 @@ available. The snapshot independently
 reauthenticates the scenario comparison contract against the manifest and exposes its
 canonical digest, permitted-difference tuple, and ordered `(case_set, case_id, mode)`
 alignment keys without deciding admission. The planned TOPK scenario remains inactive:
-there is no checked-in runnable capsule configuration, comparison evidence/CLI dispatch,
-or TOPK payload interpretation.
+there is no checked-in runnable capsule configuration or TOPK payload interpretation.
+
+### Derived capsule comparison publication
+
+`strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID --kind capsule [--home PATH]`
+selects the offline capsule comparator. The existing two positional arguments and default
+suite comparison remain unchanged; `--kind suite` explicitly selects that default. Mixed
+run kinds fail authentication rather than falling back to another comparator.
+
+`compare_capsule_runs` in `capsule_comparison_runs.py` calls the unchanged pure comparator,
+renders a deterministic Markdown projection, and preflights exact output bytes for portable
+media, member/aggregate capacity, and secrets before allocating a run. The captured and
+resolved request binds the ordered source run IDs and record digests, comparison policy and
+contract digest, canonical JSON report digest, and Markdown digest. Its experiment ID is
+`capsule-compare-` plus the first 24 hex characters of SHA-256 over canonical request JSON.
+Immediately before publication, both finalized capsule snapshots are fully reauthenticated
+and their record digests must still match the report. This uses the existing owning-UID
+storage trust boundary; it does not add hardware or build leases.
+
+The wrapper owns a fresh derived `RunSession` and never modifies either source arm. It
+writes exactly `comparison/report.json` (`application/json`) and `comparison/report.md`
+(`text/markdown`), both with role `comparison`. The JSON is the exact canonical comparator
+output; Markdown only renders its typed fields. Opaque payloads remain non-semantic.
+Every valid statistical verdict finalizes `SUCCESS`, including regression, mixed, and
+inconclusive. Errors before allocation create no run. Errors after allocation use existing
+failure finalization and expose only a fixed-safe error, run ID, and available record path;
+any already committed portable entries remain evidence. Integrity failures that prevent
+finalization retain the existing recovery behavior rather than claiming a terminal record.
+
+Repeating a command creates a new run with identical request/report bytes for unchanged arms;
+it does not deduplicate or overwrite evidence. Existing run finalization and recovery remain
+idempotent. Normal bundle export/verification applies. This is a derived report, not a
+standalone proof of both arms: export both source-run bundles for independent verification.
+Host-only publication tests cover authenticated fake arms, exact bytes, repeat and reversed
+arms, bundle verification, rejected inputs, secret preflight, record drift, publication and
+finalization failures, and CLI dispatch. No GPU or TOPK semantics are required.
 
 ## Future challenge boundary
 

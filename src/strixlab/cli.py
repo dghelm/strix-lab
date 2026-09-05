@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -23,6 +24,11 @@ from strixlab.builds import (
 )
 from strixlab.bundles import BundleError, export_bundle, verify_bundle
 from strixlab.campaign_cli import campaign_app
+from strixlab.capsule_comparison_runs import (
+    CapsuleComparisonExecutionError,
+    CapsuleComparisonRunError,
+    compare_capsule_runs,
+)
 from strixlab.capsule_runs import (
     CapsuleExecutionError,
     CapsuleRunError,
@@ -490,6 +496,11 @@ def doctor(
     raise typer.Exit(code=1)
 
 
+class ComparisonKind(StrEnum):
+    suite = "suite"
+    capsule = "capsule"
+
+
 @app.command("compare")
 def compare(
     baseline_run_id: Annotated[str, typer.Argument(help="Finalized baseline run ID.")],
@@ -498,10 +509,14 @@ def compare(
         Path | None,
         typer.Option("--home", help="Override the StrixLab data home."),
     ] = None,
+    kind: Annotated[
+        ComparisonKind, typer.Option("--kind", help="Comparison kind: suite or capsule.")
+    ] = ComparisonKind.suite,
 ) -> None:
-    """Compare two finalized successful suite runs into one immutable comparison run.
+    """Compare two finalized successful runs into one immutable comparison run.
 
-    Authenticates both arms offline, pairs their matched throughput samples conservatively,
+    Defaults to suite throughput comparison; --kind capsule selects capsule latency.
+    Authenticates both arms offline, pairs their matched samples conservatively,
     and finalizes a comparison run carrying canonical JSON and Markdown reports. It never
     touches hardware, reruns an adapter, or mutates either arm. A statistical regression,
     mixed, or inconclusive verdict is still a successfully executed comparison run.
@@ -509,20 +524,21 @@ def compare(
 
     environ, context = _evidence_terminal_context()
     try:
-        result = compare_runs(
+        comparator = compare_capsule_runs if kind == ComparisonKind.capsule else compare_runs
+        result = comparator(
             baseline_run_id,
             candidate_run_id,
             home=resolve_home(home),
             environ=environ,
         )
-    except JudgeExecutionError as exc:
+    except (JudgeExecutionError, CapsuleComparisonExecutionError) as exc:
         # A comparison run was allocated but no report could be published; surface it.
         _evidence_echo(f"comparison: {exc.run_id}", context, err=True)
         if exc.record is not None:
             _evidence_echo(f"record: {exc.record}", context, err=True)
         _evidence_echo(f"compare failed: {exc}", context, err=True)
         raise typer.Exit(code=1) from None
-    except JudgeError as exc:
+    except (JudgeError, CapsuleComparisonRunError) as exc:
         # A pre-allocation failure: no run was created, so reveal no comparison id.
         _evidence_echo(f"compare failed: {exc}", context, err=True)
         raise typer.Exit(code=1) from None
