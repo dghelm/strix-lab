@@ -547,6 +547,52 @@ digest, and only from rehydrate equivalence, because it is attempt-variable (ASL
 randomizes the load addresses in `ldd` output); every other captured field must
 match.
 
+### Fixed native host fixture build policy
+
+The existing command `strixlab build prepare PREPARATION_ID BUILD_PROFILE [--home PATH]`
+accepts the source adapter `strixlab_native` only for `toolchain.mode: host` and exactly
+one requested target, `topk_capsule_host_test`. Other targets or modes, including a
+production HIP target, fail before allocating a build attempt. This is a fixed policy,
+not a plugin registry or an arbitrary executable/subdirectory option. The existing
+`llama_cpp` configure arguments, target policy, and recipe identities are preserved.
+
+Both CMake configurations use the authenticated snapshot's fixed `native/topk` directory.
+Its `native`, `topk`, and `CMakeLists.txt` components must have real directory/file types;
+symlinks are rejected. Snapshotting and source reproduction still cover the whole source
+tree, including files outside that CMake subtree and the native worker's pinned vendored
+JSON header, license, and provenance. No dependency is fetched during configure. The
+source adapter already participates in the recipe identity; any incompatible future
+change to this fixed native policy requires a new adapter identity.
+
+Native configuration receives `STRIXLAB_NATIVE_BUILD_COMMIT` (the exact source base
+commit with the existing `-dirty` suffix when patches are present) and
+`STRIXLAB_NATIVE_BUILD_NUMBER=0`. These native keys, the fixed CMake source directory,
+and HIP/gfx selections cannot be overridden through the native profile. Native builds
+do not receive or accept fabricated LLAMA/GGML version metadata. Probe and final caches
+must bind the fixed source directory and native version, and the current cache is checked
+again before success, including cache hits and rehydration.
+
+The native project declares C and CXX. Existing C/C++ compiler, linker and archiver
+selection and executable observations remain mandatory. File API discovery, ELF checks,
+resolved runtime dependencies, content hashing, source revalidation, canonical records,
+producer attestations, cache ownership and build leases all retain their existing rules.
+In-build shared libraries need loader-valid paths: an absolute RPATH containing the
+`build-sha256:` directory name is split at its colon by the loader; use origin-relative
+RPATHs. Unresolved dependencies fail the build rather than weakening closure checks.
+
+A genuine host build can be leased and its named executable resolved for an explicit
+test caller of `run_capsule_protocol`. It has no HIP compiler or gfx selection and cannot
+satisfy production `run_capsule` build admission. No host-as-GPU claim, production TOPK
+manifest, or comparison-policy change is introduced. A future production milestone must
+separately authorize an actual HIP provider target, observe its compiler/ROCm/gfx identity,
+and pass normal build, lease, machine, capsule run, and comparison gates.
+
+Host tests use an actual local Git source, CMake/Ninja compilation and shared-library
+closure, then verify the canonical record and lease, cache hit and rehydration, rejected
+source paths and selections, source/artifact/cache mutation, and unchanged rejection of
+a host build by production capsule admission. Synthetic fixture output is test evidence,
+not TOPK performance evidence.
+
 ## Run evidence v1
 
 A run is the first trustworthy, reusable evidence boundary layered above the build

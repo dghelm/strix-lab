@@ -67,6 +67,17 @@ from strixlab.sources import SourceEvidence, SourceLease, lease_source
 _VERSION_LIMIT = 256 * 1024
 _CACHE_LIMIT = 16 * 1024 * 1024
 _LLAMA_CPP_TARGETS = frozenset({"llama-bench", "llama-server", "test-backend-ops"})
+_NATIVE_ADAPTER = "strixlab_native"
+_NATIVE_TARGET = "topk_capsule_host_test"
+_NATIVE_METADATA_KEYS = frozenset({"STRIXLAB_NATIVE_BUILD_COMMIT", "STRIXLAB_NATIVE_BUILD_NUMBER"})
+_NATIVE_GPU_KEYS = frozenset(
+    {
+        "AMDGPU_TARGETS",
+        "CMAKE_HIP_ARCHITECTURES",
+        "CMAKE_HIP_COMPILER",
+        "CMAKE_HIP_COMPILER_ROCM_ROOT",
+    }
+)
 _RESERVED_CMAKE_KEYS = frozenset(
     {
         "CMAKE_AR",
@@ -361,10 +372,14 @@ def configure_command(
     build: Path,
     *,
     source_version: _SourceVersion,
+    source_adapter: str = "llama_cpp",
 ) -> tuple[str, ...]:
     """Return the deterministic CMake configure command for one fresh root."""
 
-    overlap = _RESERVED_CMAKE_KEYS.intersection(profile.cmake)
+    reserved = _RESERVED_CMAKE_KEYS
+    if source_adapter == _NATIVE_ADAPTER:
+        reserved |= _NATIVE_METADATA_KEYS | _NATIVE_GPU_KEYS | {"CMAKE_HOME_DIRECTORY"}
+    overlap = reserved.intersection(profile.cmake)
     if overlap:
         raise CMakeBuildError(
             "build profile overrides adapter-owned CMake keys: " + ", ".join(sorted(overlap))
@@ -382,11 +397,11 @@ def configure_command(
         f"-DCMAKE_C_COMPILER={profile.toolchain.c_compiler}",
         f"-DCMAKE_CXX_COMPILER={profile.toolchain.cxx_compiler}",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-        f"-DGGML_BUILD_COMMIT={source_version.build_commit}",
-        "-DGGML_BUILD_NUMBER=0",
-        f"-DLLAMA_BUILD_COMMIT={source_version.build_commit}",
-        "-DLLAMA_BUILD_NUMBER=0",
     ]
+    for prefix in _source_version_prefixes(source_adapter):
+        command.extend(
+            (f"-D{prefix}_BUILD_COMMIT={source_version.build_commit}", f"-D{prefix}_BUILD_NUMBER=0")
+        )
     if profile.toolchain.hip_compiler is not None:
         command.append(f"-DCMAKE_HIP_COMPILER={profile.toolchain.hip_compiler}")
     command.extend(
@@ -423,12 +438,52 @@ def _required(cache: Mapping[str, str], key: str) -> str:
     return value
 
 
-def _verify_source_version(cache: Mapping[str, str], expected: _SourceVersion) -> None:
-    for prefix in ("GGML", "LLAMA"):
+def _source_version_prefixes(source_adapter: str) -> tuple[str, ...]:
+    if source_adapter == "llama_cpp":
+        return ("GGML", "LLAMA")
+    if source_adapter == _NATIVE_ADAPTER:
+        return ("STRIXLAB_NATIVE",)
+    raise CMakeBuildError("CMake build source adapter is not supported")
+
+
+def _verify_source_version(
+    cache: Mapping[str, str], expected: _SourceVersion, *, source_adapter: str = "llama_cpp"
+) -> None:
+    for prefix in _source_version_prefixes(source_adapter):
         if _required(cache, f"{prefix}_BUILD_COMMIT") != expected.build_commit:
             raise CMakeBuildError("CMake selected unexpected source-version metadata")
         if _required(cache, f"{prefix}_BUILD_NUMBER") != "0":
             raise CMakeBuildError("CMake selected unexpected source build number")
+
+
+def _configuration_source(snapshot: SourceSnapshot, source_adapter: str) -> Path:
+    if source_adapter != _NATIVE_ADAPTER:
+        return snapshot.source
+    source = snapshot.source
+    for part in ("native", "topk", "CMakeLists.txt"):
+        source = source / part
+        metadata = source.lstat()
+        expected_type = stat.S_ISREG if part == "CMakeLists.txt" else stat.S_ISDIR
+        if not expected_type(metadata.st_mode):
+            raise CMakeBuildError(
+                "native CMake source must use real directories and CMakeLists.txt"
+            )
+    return source.parent
+
+
+def _verify_native_configuration(cache: Mapping[str, str], source: Path) -> None:
+    if _required(cache, "CMAKE_HOME_DIRECTORY") != str(source):
+        raise CMakeBuildError(
+            "native CMake source directory does not match the fixed snapshot path"
+        )
+    if any(cache.get(key, "") for key in _NATIVE_GPU_KEYS):
+        raise CMakeBuildError("native host fixture cannot select a HIP compiler or gfx target")
+    if any(
+        cache.get(f"{prefix}_BUILD_{suffix}", "")
+        for prefix in ("GGML", "LLAMA")
+        for suffix in ("COMMIT", "NUMBER")
+    ):
+        raise CMakeBuildError("native host fixture cannot declare llama source metadata")
 
 
 def _selected_realpath(cache: Mapping[str, str], key: str, configured: str | None = None) -> str:
@@ -525,13 +580,16 @@ def _run_configure(
     *,
     source: Path,
     source_version: _SourceVersion,
+    source_adapter: str,
     build: Path,
     environment: Mapping[str, str],
     attempt: BuildAttemptSession,
     label: str,
     runner: ProcessRunner,
 ) -> bytes:
-    command = configure_command(profile, source, build, source_version=source_version)
+    command = configure_command(
+        profile, source, build, source_version=source_version, source_adapter=source_adapter
+    )
     result = runner(
         command,
         cwd=build,
@@ -554,8 +612,15 @@ def _authorize_build(preparation: SourceLease, profile: BuildProfileV1) -> None:
     evidence = preparation.evidence
     if profile.source != evidence.source_id:
         raise CMakeBuildError("build profile source does not match the preparation")
+    if evidence.adapter == _NATIVE_ADAPTER:
+        if profile.toolchain.mode != "host" or profile.targets != [_NATIVE_TARGET]:
+            raise CMakeBuildError("native build requires the single host fixture target")
+        reserved = _RESERVED_CMAKE_KEYS | _NATIVE_METADATA_KEYS | _NATIVE_GPU_KEYS
+        if (reserved | {"CMAKE_HOME_DIRECTORY"}).intersection(profile.cmake):
+            raise CMakeBuildError("native build profile overrides adapter-owned CMake keys")
+        return
     if evidence.adapter != "llama_cpp":
-        raise CMakeBuildError("CMake build adapter requires a llama_cpp source")
+        raise CMakeBuildError("CMake build requires a llama_cpp or strixlab_native source")
     unauthorized = set(profile.targets) - _LLAMA_CPP_TARGETS
     if unauthorized:
         raise CMakeBuildError(
@@ -597,6 +662,15 @@ def _revalidate_before_finalize(
     runner: ProcessRunner,
     verify_artifacts: bool = True,
 ) -> None:
+    if preparation.evidence.adapter == _NATIVE_ADAPTER:
+        source = _configuration_source(snapshot, preparation.evidence.adapter)
+        current_cache = parse_cmake_cache(_read_cache(root / "CMakeCache.txt"))
+        _verify_source_version(
+            current_cache, _source_version(preparation), source_adapter=preparation.evidence.adapter
+        )
+        _verify_native_configuration(current_cache, source)
+        if selections_from_cache(profile, current_cache) != selections_from_cache(profile, cache):
+            raise CMakeBuildError("native CMake selections changed before finalization")
     reverified_tools = _combine_tool_probes(
         probe_tools(profile, cwd=snapshot.source, environment=environment, runner=runner),
         probe_selected_tools(
@@ -867,6 +941,7 @@ def _execute_leased_build(
         finalize_started = False
         try:
             attempt.mark_active()
+            configure_source = _configuration_source(snapshot, evidence.adapter)
             (attempt.root / "logs").mkdir(mode=0o700)
             environment = _private_environment(profile, attempt.root / "private")
             attempt.write_evidence(
@@ -893,8 +968,9 @@ def _execute_leased_build(
             _prepare_build_root(attempt.root / "private", attempt.probe_root)
             probe_cache_bytes = _run_configure(
                 profile,
-                source=snapshot.source,
+                source=configure_source,
                 source_version=source_version,
+                source_adapter=evidence.adapter,
                 build=attempt.probe_root,
                 environment=environment,
                 attempt=attempt,
@@ -902,7 +978,9 @@ def _execute_leased_build(
                 runner=runner,
             )
             probe_cache = parse_cmake_cache(probe_cache_bytes)
-            _verify_source_version(probe_cache, source_version)
+            _verify_source_version(probe_cache, source_version, source_adapter=evidence.adapter)
+            if evidence.adapter == _NATIVE_ADAPTER:
+                _verify_native_configuration(probe_cache, configure_source)
             probe_selections = selections_from_cache(profile, probe_cache)
             selected_tools = probe_selected_tools(
                 probe_cache,
@@ -985,8 +1063,9 @@ def _execute_leased_build(
                         prepare_file_api_query(final_root)
                         final_cache_bytes = _run_configure(
                             profile,
-                            source=snapshot.source,
+                            source=configure_source,
                             source_version=source_version,
+                            source_adapter=evidence.adapter,
                             build=final_root,
                             environment=environment,
                             attempt=attempt,
@@ -994,7 +1073,11 @@ def _execute_leased_build(
                             runner=runner,
                         )
                         final_cache = parse_cmake_cache(final_cache_bytes)
-                        _verify_source_version(final_cache, source_version)
+                        _verify_source_version(
+                            final_cache, source_version, source_adapter=evidence.adapter
+                        )
+                        if evidence.adapter == _NATIVE_ADAPTER:
+                            _verify_native_configuration(final_cache, configure_source)
                         final_selections = selections_from_cache(profile, final_cache)
                         if final_selections != probe_selections:
                             raise CMakeBuildError("final CMake selections drifted from the probe")
