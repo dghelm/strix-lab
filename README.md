@@ -37,30 +37,43 @@ A clean checkout provides a strict, evidence-oriented CLI:
 - **Offline comparison judge** — compare two finalized, equivalent, successful
   runs into one immutable comparison run with a conservative, non-scoring
   verdict (`compare`).
+- **Bounded campaigns** — freeze a reviewed patch list and inspect or report
+  its local state (`campaign create`, `inspect`, `report`). `resume` is the
+  hardware evaluator, not part of the CPU-only path.
 
 ### Bounded profile-guided campaigns
 
-A campaign is a local, finite investigation of reviewed source patches against
-one strict frozen evaluator (suite, machine, source, build, model, and
-comparison policy). The controller freezes a conservative fixed patch list, screens candidates,
-and requires a fresh independent confirmation before retain or reject.
-Calibration is two distinct baseline/baseline runs. Screening costs four AB/BA
-runs per candidate; confirmation of a screening winner costs four more.
-Interrupted phases stay spent and are not auto-retried. The suite-run budget
-counts calibration, confirmation, failures, and interruptions and is not a
-wall-clock deadline. An external agent may propose the next campaign from
-`campaign report`. Failed and inconclusive findings stay in the record.
-Campaigns do not replace the evidence CLI, do not open upstream pull
-requests, and do not require ROCm 10.
+A campaign freezes one evaluator and a conservative reviewed patch list,
+screens candidates, and requires a fresh confirmation before
+`objective_met_provisional`. The raw judge verdict, including `mixed`, is
+preserved. Failed and inconclusive findings stay in the record. Interrupted
+candidates stay spent; resume continues untouched candidates. Calibration
+interruption stops the campaign. Campaigns do not replace the evidence CLI,
+do not open upstream pull requests, and do not require ROCm 10.
 
-See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure, frozen
-evaluator, spent-interrupt and count-budget rules, and the controller command
-surface. Executable README command examples wait on the checked-in campaign
-CLI. See [`docs/research-problems.md`](docs/research-problems.md)
+See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure and
+schema, and [`docs/research-problems.md`](docs/research-problems.md)
 ("Profile-guided llama.cpp research problems") for ranked, bounded
-hypotheses and the smallest honest post-merge pilot. It separates v1 patch
-campaigns from configuration tuning and blocked workloads; it is not an
-experiment catalog. Hardware campaign execution is later.
+hypotheses and the smallest honest post-merge pilot. That portfolio is
+docs-only, not a catalog.
+
+`create` is freeze-only. Copy the campaign `id` from the printed JSON.
+
+```bash
+uv run strixlab campaign create configs/campaigns/historical-mmvq-demo.yaml
+CAMPAIGN_ID='...'
+
+uv run strixlab campaign inspect "$CAMPAIGN_ID"
+uv run strixlab campaign report "$CAMPAIGN_ID"
+```
+
+That demonstration plan uses a historical known-negative MMVQ patch. It is a
+harness demo, not a suggested optimization. `resume` builds and runs the
+pinned smoke suite on hardware and is not a five-minute CPU check:
+
+```bash
+uv run strixlab campaign resume "$CAMPAIGN_ID"
+```
 
 ### What does not exist yet
 
@@ -69,7 +82,8 @@ experiment catalog. Hardware campaign execution is later.
   outside the repository.
 - No automatic upstream patch bot; StrixLab never pushes runtime changes or
   opens upstream pull requests. A retain decision is local evidence, not a PR.
-- No fabricated campaign measurements; GPU execution of campaigns is later.
+- No fabricated campaign measurements. `campaign resume` is authorized
+  hardware work, not a CPU-only checkout check.
 
 Community experiments (see below) are locally executed, reviewable
 investigations—not remotely executed submissions or official scores.

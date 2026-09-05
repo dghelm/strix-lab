@@ -17,27 +17,12 @@ automatic upstream patch bot.
 
 Read `docs/autoresearch.md` before adding campaign plans or interpreting
 campaign JSON. Ranked, bounded hypotheses and the smallest honest post-merge
-pilot are in `docs/research-problems.md`. That file is docs-only, not an
-experiment catalog, and separates v1 patch campaigns from configuration
-tuning and blocked workloads.
+pilot are in `docs/research-problems.md` (docs-only, not a catalog).
 
-A campaign is a local, finite investigation of reviewed patches against one
-strict frozen evaluator. The required loop is: hypothesis → fixed evaluator →
-patch → screen → fresh independent confirmation → retain/reject → next
-campaign. Screening is exploration only. Confirmation must use new baseline and
-candidate runs, not the screening evidence. Calibration is two distinct
-baseline/baseline no-op suites, not a candidate comparison. Keep failed,
-negative, inconclusive, and interrupted findings.
-
-Interrupted phases stay spent and terminal: resume never auto-retries that
-phase. `max_suite_runs` is a count budget that includes calibration, per-
-candidate screening, confirmation of screening winners, failures, and
-interrupted whole-phase reservations. It is an admission check, not a wall-
-clock deadline. Cost is 2 calibration runs + 4 AB/BA screen runs per
-candidate + 4 fresh AB/BA confirmation runs per screening winner.
-
-v1 commands (controller surface; README examples wait on the checked-in CLI;
-ask core before inventing extra options):
+Loop: hypothesis → fixed evaluator → patch → screen → fresh confirmation →
+retain/reject. Next campaign is a **new** reviewed plan informed by
+`campaign report`; never rewrite an old campaign. Keep failed, negative,
+inconclusive, and interrupted findings.
 
 ```bash
 uv run strixlab campaign create PLAN.yaml
@@ -46,20 +31,39 @@ uv run strixlab campaign report ID
 uv run strixlab campaign resume ID
 ```
 
-`create` freezes a conservative fixed patch list and does not run suites.
-`resume` evaluates remaining phases and is hardware work for later; do not
-run GPU campaigns, download models, or provision ROCm as part of scaffold
-documentation. `inspect` prints canonical JSON state from
-`<home>/campaigns/<id>/state.json`. `report` renders Markdown from that
-verified state so an external agent can propose the next campaign; the
-controller does not auto-start one. There is no exploration-versus-
-confirmation flag, no automatic upstream push, and no ROCm 10 prerequisite.
+All four take optional `--home`. `create`, `resume`, and `inspect` print
+canonical JSON; `report` prints Markdown. `create` freezes only. `resume` is
+hardware. `inspect` validates evidence links. State is
+`<home>/campaigns/<id>/state.json` plus `frozen.json` and copied patches.
+There is no phase flag and no campaign JSON Schema registration.
 
-Conservative retain bar: both screening comparisons and both confirmation
-comparisons must all-case improve, and cross-arm greedy token digests and
-counts must match on each. Do not treat mixed or inconclusive as a win, reuse
-screening runs as confirmation, retry a spent interrupted phase, or open a
-pull request because a candidate was retained.
+Required plan fields: `schema_version` `1`, `id`, `suite`, `machine`,
+`source`, `build`, `model`, `candidates: [{id, patches}]`, `max_candidates`
+(`>=` list length), `max_suite_runs` (`>= 0`; zero stops before
+preparation). Paths are relative to the plan directory. Optional
+`objective_cases` defaults to all performance cases;
+`protected_regression_margin_percent` defaults to `0` (`0 <= m < 100`).
+Patches are `ggml/src` source files only.
+
+Calibration is two baseline/baseline suite runs plus one `inconclusive`
+token-matching compare. Screening is four AB/BA runs per candidate.
+Confirmation is four fresh runs if screening is eligible. Both screening
+comparisons and both confirmation comparisons must pass the frozen
+objective/protected gates and cross-arm greedy token parity. Raw judge
+`mixed` stays `mixed`; the campaign label is `objective_met_provisional`.
+Token identity means launch/layout-preserving candidates only.
+
+An interrupted candidate phase is spent and terminal; resume continues
+untouched candidates and does not replay it. Interrupted calibration stops
+the campaign. Some failures have no authenticatable run ID; record that a
+failure-evidence link is unavailable rather than claiming every failure is
+linked. `max_suite_runs` is a count, not a wall-clock deadline.
+
+Do not run GPU `resume`, download models, or provision ROCm as scaffold
+work. Do not treat mixed as a win, retry a spent candidate, or open a pull
+request because a candidate was retained. The checked-in
+`configs/campaigns/historical-mmvq-demo.yaml` is a known-negative harness
+demo, not a suggested optimization.
 
 ## Planned scenarios
 
