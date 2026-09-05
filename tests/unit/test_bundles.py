@@ -113,6 +113,33 @@ def test_export_fails_on_secret_in_environment(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize("secret_name", [None, "API_TOKEN", "SESSION", "XDG_SESSION_CLASS_TOKEN"])
+def test_export_session_class_with_user_containing_evidence(
+    tmp_path: Path, secret_name: str | None
+) -> None:
+    home = tmp_path / "home"
+    payload = b'{"path":"examples/llama.android/app/src/main/res/drawable/bg_user_message.xml"}\n'
+    with ev.begin_run(
+        "exp-class", b"suite: s\n", resolved={"a": 1}, home=home, environ=_ENV
+    ) as run:
+        run.write_portable("suite/build.json", payload, media_type="application/json", role="build")
+        run.succeed()
+
+    environ = {**_ENV, "XDG_SESSION_CLASS": "user"}
+    if secret_name is not None:
+        environ[secret_name] = "user"
+    destination = tmp_path / "bundle"
+    if secret_name is not None:
+        with pytest.raises(bd.BundleError, match="sensitive value"):
+            bd.export_bundle(run.run_id, destination, home=home, environ=environ)
+        assert not destination.exists()
+    else:
+        bd.export_bundle(run.run_id, destination, home=home, environ=environ)
+        assert bd.verify_bundle(destination).run_id == run.run_id
+        blob = destination / "run" / "portable" / "blobs" / hashlib.sha256(payload).hexdigest()
+        assert blob.read_bytes() == payload
+
+
 def _tamper(bundle: Path, relative: str, content: bytes) -> None:
     target = bundle / relative
     target.chmod(0o600)
