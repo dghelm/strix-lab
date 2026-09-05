@@ -18,6 +18,7 @@ _KNOWN_NONSECRET_SESSION_NAMES = frozenset(
         "CLAUDE_CODE_CHILD_SESSION",
         "DBUS_SESSION_BUS_ADDRESS",
         "SESSION_MANAGER",
+        "XDG_SESSION_CLASS",
         "XDG_SESSION_ID",
     }
 )

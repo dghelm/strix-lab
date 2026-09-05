@@ -223,3 +223,24 @@ Separately, the PP `hipModuleGetFunction.kname` serialization defect is a profil
 
 - [x] This report contains no model weights, credentials, private data, raw
       StrixLab home, or evidence bundle, and identifying values are redacted.
+
+## Follow-up: 2026-09-05 bundle export verification
+
+The initial export failure above was a false positive: `XDG_SESSION_CLASS=user`
+matched ordinary source filenames in the authenticated build snapshot. Fix
+`6fb21eb3c14ae275b84180517a106038ae5d895e` adds only the exact environment name
+to the existing nonsecret allowlist; token and other sensitive session names
+remain guarded. Independent coordinator review approved the fix and reran all
+72 focused tests successfully.
+
+The coordinator then successfully exported and verified all three bundles under
+the current environment, preserving the original run record hashes:
+
+| Run | Bundle members | Original record SHA-256 |
+|---|---:|---|
+| First baseline | 396 | `1dd5733c51bd81cd31d58cf5b5339aedfeb29b1549c65ffb16e8da5b5a7fd9a7` |
+| Second baseline | 397 | `a6cd039d7cd07327a446d4f7c75d157036ce34c1e42315dd2cf031283a888d55` |
+| Comparison | 13 | `94ff7a1bc7a0cad1d92d05e151185bde47a2f305e22e3df9228b6517afcdb6b0` |
+
+The immutable evidence was not rewritten. These bundles remain local and have
+not been published; the initial failure remains recorded above as history.
