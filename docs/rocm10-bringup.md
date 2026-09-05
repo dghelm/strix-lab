@@ -114,10 +114,11 @@ control must remain untouched.
 ### Archive admission contract
 
 The host-only `strixlab.rocm_archive` reader and its structural member manifest
-implement the narrow grammar below. The extractor and prefix verifier do not
-exist. Structural admission does not authenticate an SDK, authorize extraction,
-or clear either activation gate. The complete preparation path must enforce all
-of these rules:
+implement the narrow grammar below. The synthetic extractor and unqualified prefix
+inventory/comparison are implemented in the slices below. They do not provide the
+qualified post-copy verifier required for SDK activation. Structural admission does
+not authenticate an SDK, authorize real-SDK extraction, or clear either activation
+gate. The complete preparation path must enforce all of these rules:
 
 1. Bind review and extraction to the same exact tarball bytes: the bytes covered
    by the vendor anchor or explicit risk acceptance and by the retained
