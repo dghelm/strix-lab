@@ -36,6 +36,7 @@ set(CMAKE_BUILD_RPATH_USE_ORIGIN TRUE)
 set(STRIXLAB_NATIVE_BUILD_COMMIT "" CACHE STRING "source commit")
 set(STRIXLAB_NATIVE_BUILD_NUMBER "" CACHE STRING "source build number")
 add_library(topk_host_support SHARED support.c)
+target_link_options(topk_host_support PRIVATE "-Wl,--as-needed")
 add_executable(topk_capsule_host_test main.cpp)
 target_compile_features(topk_capsule_host_test PRIVATE cxx_std_17)
 target_link_libraries(topk_capsule_host_test PRIVATE topk_host_support)
@@ -91,7 +92,9 @@ def _source(tmp_path: Path, *, defect: str | None = None) -> tuple[Path, SourceP
     native = repository.path / "native" / "topk"
     native.mkdir(parents=True)
     (native / "CMakeLists.txt").write_text(_CMAKE)
-    (native / "support.c").write_text("int fixture_value(void) { return 7; }\n")
+    (native / "support.c").write_text(
+        "#include <stdio.h>\nint fixture_value(void) { fflush(NULL); return 7; }\n"
+    )
     (native / "main.cpp").write_text(
         '#include <iostream>\nextern "C" int fixture_value(void);\n'
         'int main() { std::cout << fixture_value() << "\\n"; }\n'
@@ -140,6 +143,12 @@ def test_real_native_lifecycle_leases_closure_cache_and_host_admission(tmp_path:
     }
     assert result.artifacts.compile_commands_sha256 is not None
     assert any(value.runtime_dependency for value in result.artifacts.artifacts)
+    support_inspection = next(
+        value
+        for value in result.artifacts.inspections
+        if value.artifact.endswith("libtopk_host_support.so")
+    )
+    assert "libc.so.6" in support_inspection.needed
     with lease_build(result.build_id, home=home) as lease:
         executable, digest = resolve_target_executable(
             lease.canonical.artifacts, _TARGET, lease.root, error=RuntimeError
