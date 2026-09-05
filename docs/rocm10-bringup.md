@@ -254,6 +254,56 @@ Synthetic fixtures establish grammar behavior only. Prefix inventory, privileged
 metadata auditing, real artifact authenticity, installation location approval
 and runtime isolation remain separate unresolved work.
 
+### Explicit GNU direct-hardlink profile
+
+`strixlab.rocm_archive.inspect_gnu_archive(parent_fd, name)` explicitly selects
+`rocm-archive-gnu-direct-hardlink-v1`. The default `inspect_archive` and its V1
+reports/events retain the POSIX grammar above. Neither entry point auto-detects
+or falls back to another dialect. The GNU subset is tested with synthetic bytes;
+diagnostic vendor-archive censuses do not establish admission.
+
+- Every header uses GNU magic `7573746172202000` at bytes 257–264 and has a
+  completely zero tail at bytes 345–511. Checksum, octal, text, zero device
+  fields, gzip completion, expansion and input-stability rules remain strict.
+  PAX, `K`, sparse data, base-256 numbers, mixed magic and other types are rejected.
+- An initial `./` directory header, mode `0755`, zero payload and empty linkname
+  is mandatory. It is recorded separately and excluded from the material tree.
+  It never supplies the filesystem quarantine root's mode.
+- Material types are exactly `0` (regular `0644` or `0755`), `5` (directory
+  `0755`), `2` (symlink `0777`), and `1` (direct hardlink `0644` or `0755`).
+  Remove exactly one required leading `./` from material paths, then apply
+  the existing component and explicit-parent rules. Symlink literals retain
+  the existing relative, canonical, lexically-contained policy.
+- `L` controls require name `././@LongLink`, mode `0644`, empty linkname and
+  102–4097 payload bytes: a 101–4096-byte full name plus one final NUL, with
+  no embedded NUL and zero padding. The next physical header must be regular
+  `0`, whose raw 100-byte name equals the full name's first 100 bytes. Compare
+  before decoding a potentially split UTF-8 character; validate the full name.
+  Consecutive/dangling controls and other overrides are rejected.
+- Hardlink targets require one leading `./` and a canonical archive-root-relative
+  path naming an already completed regular wire member with matching mode.
+  Forward references, chains, cycles, missing targets and nonregular sources
+  are rejected. Wire payload size stays zero and wire SHA-256 stays null.
+
+The separate frozen `GnuArchiveManifestV1` records the root marker, physical
+header ordinals/offsets, long-name control positions, effective wire names,
+wire linknames, normalized paths and original member kinds. Its separate
+`hardlink_copies` projection records each destination, direct regular source,
+mode and materialized size/SHA-256. `regular_payload_bytes` counts only regular
+wire payloads; `independent_copy_bytes` counts all projected copies; their sum
+is `materialized_regular_bytes`. No filesystem hardlink is created by inspection.
+
+Limits remain 64 KiB chunks, 8 GiB per file, 32 GiB regular wire payload,
+1,000,000 material members and 64:1 gzip expansion. Total materialization,
+including every independent copy, is separately capped at 32 GiB. Raw headers
+are capped at twice the member limit plus one. Root/control evidence, entries
+and copy records are charged against the 64 MiB metadata budget before retention;
+only one bounded long-name control may be pending. GNU start/end callbacks use
+separate provisional types; controls emit no material-member callbacks. The
+shared descriptor/gzip lifecycle returns a complete structural report only after
+termination, CRC, topology and final input-identity checks. This parser adds no
+extraction, provenance acceptance, metadata qualification or installation action.
+
 ### Metadata observation slice (unqualified)
 
 `strixlab.rocm_metadata.observe_inode_metadata(parent_fd, name)` observes stored
