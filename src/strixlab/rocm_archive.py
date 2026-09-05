@@ -14,7 +14,7 @@ import re
 import stat
 import unicodedata
 import zlib
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -346,8 +346,8 @@ def _iter_provisional_members(reader: _DecodedReader) -> Iterator[_ProvisionalEv
     """Emit explicitly provisional starts, payload chunks and member observations.
 
     Exhaustion validates the stream/topology, but does NOT validate descriptor
-    stability or return an admitted manifest. Only inspect_archive completes
-    that boundary. A future extractor must use this interpretation, never a
+    stability or return an admitted manifest. Only _consume_archive completes
+    that boundary for inspect_archive and future consumers. Never use a
     separate permissive tar parser or individual events as admission evidence.
     """
 
@@ -406,6 +406,23 @@ def inspect_archive(directory_fd: int, name: str) -> ArchiveManifestV1:
     approved installed prefix. No filesystem entries are written.
     """
 
+    return _consume_archive(directory_fd, name)
+
+
+def _consume_archive(
+    directory_fd: int,
+    name: str,
+    consumer: Callable[[_ProvisionalEvent], None] | None = None,
+) -> ArchiveManifestV1:
+    """Run the single strict lifecycle, optionally delivering provisional events.
+
+    The synchronous callback cannot accept an entry or finish validation. Its
+    return value is ignored; exceptions abort the operation and close the input.
+    Only the returned manifest establishes complete structural inspection after
+    all stream and input-identity checks. Callback side effects are not rolled
+    back: any future writer must quarantine them until this function returns.
+    """
+
     if not name or name in {".", ".."} or "/" in name or "\0" in name:
         raise ArchiveError("archive-name")
     if not hasattr(os, "O_NOFOLLOW"):
@@ -423,11 +440,12 @@ def inspect_archive(directory_fd: int, name: str) -> ArchiveManifestV1:
             raise ArchiveError("archive-input-changed")
         compressed = _GzipStream(descriptor, opened.st_size)
         reader = _DecodedReader(compressed.chunks())
-        entries = tuple(
-            event.entry
-            for event in _iter_provisional_members(reader)
-            if isinstance(event, _ProvisionalEnd)
-        )
+        entries: list[ArchiveEntryV1] = []
+        for event in _iter_provisional_members(reader):
+            if consumer is not None:
+                consumer(event)
+            if isinstance(event, _ProvisionalEnd):
+                entries.append(event.entry)
         after = os.fstat(descriptor)
         named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         if _identity(opened) != _identity(after) or _identity(after) != _identity(named):
