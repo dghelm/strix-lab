@@ -16,7 +16,10 @@ automatic upstream patch bot.
 ## Bounded profile-guided campaigns
 
 Read `docs/autoresearch.md` before adding campaign plans or interpreting
-campaign JSON. The ranked hypothesis list is `docs/research-problems.md`.
+campaign JSON. Ranked, bounded hypotheses and the smallest honest post-merge
+pilot are in `docs/research-problems.md`. That file is docs-only, not an
+experiment catalog, and separates v1 patch campaigns from configuration
+tuning and blocked workloads.
 
 A campaign is a local, finite investigation of reviewed patches against one
 strict frozen evaluator. The required loop is: hypothesis → fixed evaluator →

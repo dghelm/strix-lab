@@ -16,6 +16,9 @@ The ranked problem portfolio is
 [Profile-guided llama.cpp research problems](research-problems.md). That
 document lists bounded hypotheses and the smallest honest post-merge pilot. It
 separates v1 patch campaigns from configuration tuning and blocked workloads.
+It is docs-only, not an experiment catalog. Launch-reuse and profile-derived
+quant dispatch lead the patch questions; configuration tuning and blocked
+workloads stay out of the v1 candidate surface.
 
 ## What a campaign is
 
@@ -180,8 +183,9 @@ pretending hardware results exist.
    stay spent and are never replayed; next campaign is a new plan. Count
    budgets include calibration, confirmation, failures, and interruptions.
 2. **Problem portfolio** — [`research-problems.md`](research-problems.md)
-   ranks bounded hypotheses and the post-merge pilot. Docs only; no
-   structured experiment catalog until something consumes one.
+   ranks bounded hypotheses and the post-merge pilot, separating v1 patch
+   campaigns from configuration tuning and blocked workloads. Docs only; no
+   structured catalog.
 3. **Reviewer / verification** — independent review of campaign evidence.
    Existing `compare` stays unchanged. Campaign-only cross-arm token parity
    and the frozen objective/protected-regression gates are extra acceptance

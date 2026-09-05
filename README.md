@@ -54,8 +54,10 @@ See [`docs/autoresearch.md`](docs/autoresearch.md) for the procedure, frozen
 evaluator, spent-interrupt and count-budget rules, and the controller command
 surface. Executable README command examples wait on the checked-in campaign
 CLI. See [`docs/research-problems.md`](docs/research-problems.md)
-("Profile-guided llama.cpp research problems") for the ranked hypothesis
-portfolio. Hardware campaign execution is later.
+("Profile-guided llama.cpp research problems") for ranked, bounded
+hypotheses and the smallest honest post-merge pilot. It separates v1 patch
+campaigns from configuration tuning and blocked workloads; it is not an
+experiment catalog. Hardware campaign execution is later.
 
 ### What does not exist yet
 
@@ -210,9 +212,10 @@ The most useful early contributions are small and honest:
 
 - **Onboarding friction** — anything unclear or broken while following this
   README is worth a report.
-- **Campaign problems** — bounded optimization hypotheses belong in
-  [`docs/research-problems.md`](docs/research-problems.md); the controller
-  procedure is [`docs/autoresearch.md`](docs/autoresearch.md).
+- **Campaign problems** — ranked, bounded hypotheses and the post-merge
+  pilot belong in [`docs/research-problems.md`](docs/research-problems.md)
+  (docs-only; not a catalog); the controller procedure is
+  [`docs/autoresearch.md`](docs/autoresearch.md).
 - **Scenarios** — propose a stable benchmark question in an Issue, then add its
   checked-in suite and supporting configs in a scenario PR.
 - **Experiments** — propose one reproducible candidate in a PR and collect

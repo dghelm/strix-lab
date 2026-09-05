@@ -308,8 +308,11 @@ Local profile-guided campaigns are a different layer: they reuse the existing
 suite and comparison judge against a frozen evaluator and a finite reviewed
 patch list. They are not hosted challenges, official scores, or an upstream
 patch bot. The procedure, v1 commands, and staged implementation plan are in
-[Bounded profile-guided campaigns](autoresearch.md). The ranked hypothesis
-list is [Profile-guided llama.cpp research problems](research-problems.md).
+[Bounded profile-guided campaigns](autoresearch.md). Ranked, bounded
+hypotheses and the smallest honest post-merge pilot are in
+[Profile-guided llama.cpp research problems](research-problems.md). That
+portfolio is docs-only, not an experiment catalog, and separates v1 patch
+campaigns from configuration tuning and blocked workloads.
 
 For the pilot, GitHub is the collaboration and catalog boundary—not an execution
 service. Existing suite manifests are called **scenarios**. A **candidate** is a
@@ -1358,9 +1361,10 @@ campaign-level confidence claim.
 1. **Core controller** — freeze, resume remaining phases, inspect JSON,
    report Markdown. Durable reservation before side effects; interrupted
    attempts stay spent and are never replayed.
-2. **Problem portfolio** — [research-problems.md](research-problems.md) ranks
-   bounded hypotheses. Docs only; no structured catalog until a consumer
-   exists.
+2. **Problem portfolio** — [research-problems.md](research-problems.md)
+   ranks bounded hypotheses and the post-merge pilot, separating v1 patch
+   campaigns from configuration tuning and blocked workloads. Docs only; no
+   structured catalog.
 3. **Reviewer / verification** — independent review of campaign evidence,
    existing judge plus the campaign-only token-parity gate, preservation of
    negative findings.
