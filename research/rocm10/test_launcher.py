@@ -81,6 +81,8 @@ def test_fixed_argv_boundary(tmp_path):
         "run-k1-variants",
         "compile-k1-onewave",
         "run-k1-onewave",
+        "compile-gdn-norm",
+        "run-gdn-norm",
     ):
         args = m.bwrap_argv(action, tmp_path, tmp_path / "native", "1:2", {}, {}, True)
         assert args[0] == "/usr/bin/bwrap"
@@ -159,7 +161,7 @@ def test_receipt_inside_lease_and_release(tmp_path, monkeypatch, failure):
     assert not active
 
 
-@pytest.mark.parametrize("artifact", ["k1", "k1-variants", "k1-onewave"])
+@pytest.mark.parametrize("artifact", ["k1", "k1-variants", "k1-onewave", "gdn-norm"])
 def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
     source, binary = m.artifact_for(f"compile-{artifact}")
     command = m.command_for(f"compile-{artifact}")
@@ -167,9 +169,10 @@ def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
     assert "-O3" in command and "--offload-arch=gfx1151" in command
     assert command[-2:] == ["-o", f"/work/{binary}"]
     assert f"/input/{source}" in command
-    assert "/native/reference.cpp" in command
+    assert ("/native/reference.cpp" in command) == (artifact != "gdn-norm")
     assert ("/native/baseline/adapter/hip_bitonic_topk.cu" in command) == (artifact == "k1")
-    assert "-lcrypto" in command and "-I/native" in command
+    assert "-lcrypto" in command
+    assert "-I/native" in command
     assert m.command_for(f"run-{artifact}") == [f"/work/{binary}"]
     for action in (f"compile-{artifact}", f"run-{artifact}"):
         monkeypatch.setattr(sys, "argv", ["run.py", action, "--output", str(tmp_path / "out")])
@@ -179,6 +182,8 @@ def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
 @pytest.mark.parametrize(
     "artifact,missing_header",
     [
+        ("gdn-norm", None),
+        ("gdn-norm", "gdn_norm.hpp"),
         ("k1", None),
         ("k1", "topk_k1.hpp"),
         ("k1-variants", None),
@@ -200,6 +205,9 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header)
         source: b"// inert source",
         "topk_k1.hpp": b"// pinned K1 header",
     }
+    if artifact == "gdn-norm":
+        del contents["topk_k1.hpp"]
+        contents["gdn_norm.hpp"] = b"// pinned GDN header"
     if artifact in ("k1-variants", "k1-onewave"):
         contents["topk_k1_variants.hpp"] = b"// pinned variants header"
     if artifact == "k1-onewave":
@@ -249,6 +257,8 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header)
 @pytest.mark.parametrize(
     "artifact,bad_digest",
     [
+        ("gdn-norm", False),
+        ("gdn-norm", True),
         ("k1", False),
         ("k1-variants", False),
         ("k1-variants", True),

@@ -49,6 +49,7 @@ ARTIFACTS = {
     "k1": ("topk_k1_compare.cpp", "topk-k1-compare"),
     "k1-variants": ("topk_k1_variants_compare.cpp", "topk-k1-variants-compare"),
     "k1-onewave": ("topk_k1_onewave_compare.cpp", "topk-k1-onewave-compare"),
+    "gdn-norm": ("gdn_norm_compare.cpp", "gdn-norm-compare"),
 }
 
 
@@ -277,6 +278,8 @@ def command_for(action: str) -> list[str]:
     ]
     if action == "compile-smoke":
         return [*compiler, "/input/hip_smoke.cpp", "-o", "/work/hip-smoke"]
+    if action == "compile-gdn-norm":
+        return [*compiler, "-I/native", f"/input/{source}", "-lcrypto", "-o", f"/work/{binary}"]
     return [
         *compiler,
         "-I/native",
@@ -472,6 +475,8 @@ def parse_args() -> argparse.Namespace:
             "run-k1-variants",
             "compile-k1-onewave",
             "run-k1-onewave",
+            "compile-gdn-norm",
+            "run-gdn-norm",
         ),
     )
     parser.add_argument("--output", type=Path, required=True, help="new exclusive phase directory")
@@ -535,6 +540,8 @@ def main(args: argparse.Namespace) -> int:
                 names.append("topk_k1.hpp")
             if args.action in ("compile-k1-variants", "compile-k1-onewave"):
                 names.append("topk_k1_variants.hpp")
+            if args.action == "compile-gdn-norm":
+                names.append("gdn_norm.hpp")
             if args.action == "compile-k1-onewave":
                 names.append("topk_k1_onewave.hpp")
         for name in names:
