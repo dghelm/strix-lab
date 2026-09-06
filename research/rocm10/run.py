@@ -43,6 +43,15 @@ MAX_OUTPUT = 1024**3
 MAX_LOG = 16 * 1024**2
 MAX_FILES = 4096
 HOST_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": "/tmp"}
+ARTIFACTS = {
+    "smoke": ("hip_smoke.cpp", "hip-smoke"),
+    "topk": ("topk_bench.cpp", "topk-bench"),
+    "k1": ("topk_k1_compare.cpp", "topk-k1-compare"),
+}
+
+
+def artifact_for(action: str) -> tuple[str, str]:
+    return ARTIFACTS[action.split("-", 1)[1]]
 
 
 def require(condition: bool, message: str) -> None:
@@ -251,8 +260,9 @@ def command_for(action: str) -> list[str]:
             "-c",
             'import json; print(json.dumps({"event":"host_check_pass","sdk_executed":False}))',
         ]
+    source, binary = artifact_for(action)
     if action.startswith("run-"):
-        return ["/work/hip-smoke" if action == "run-smoke" else "/work/topk-bench"]
+        return [f"/work/{binary}"]
     compiler = [
         "/sdk/lib/llvm/bin/clang++",
         "-x",
@@ -268,12 +278,12 @@ def command_for(action: str) -> list[str]:
     return [
         *compiler,
         "-I/native",
-        "/input/topk_bench.cpp",
+        f"/input/{source}",
         "/native/reference.cpp",
         "/native/baseline/adapter/hip_bitonic_topk.cu",
         "-lcrypto",
         "-o",
-        "/work/topk-bench",
+        f"/work/{binary}",
     ]
 
 
@@ -443,7 +453,7 @@ def run_process(argv: list[str], output: Path, wall_seconds: int) -> dict[str, A
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("check", "compile-smoke", "run-smoke", "compile-topk", "run-topk")
+        "action", choices=("check", "compile-smoke", "run-smoke", "compile-topk", "run-topk", "compile-k1", "run-k1")
     )
     parser.add_argument("--output", type=Path, required=True, help="new exclusive phase directory")
     parser.add_argument("--fixtures", type=Path, default=Path(__file__).resolve().parent)
@@ -501,7 +511,9 @@ def main(args: argparse.Namespace) -> int:
         inputs = {}
         names = ["preflight_exec.py"]
         if args.action.startswith("compile-"):
-            names.append("hip_smoke.cpp" if args.action == "compile-smoke" else "topk_bench.cpp")
+            names.append(artifact_for(args.action)[0])
+            if args.action == "compile-k1":
+                names.append("topk_k1.hpp")
         for name in names:
             inputs[name] = write_bytes(
                 output / "input" / name, file_bytes(args.fixtures / name, 1024**2)
@@ -512,7 +524,7 @@ def main(args: argparse.Namespace) -> int:
                 hashlib.sha256(raw).hexdigest() == args.binary_sha256, "run binary digest mismatch"
             )
             require(raw.startswith(b"\x7fELF"), "run input is not ELF")
-            name = "hip-smoke" if args.action == "run-smoke" else "topk-bench"
+            name = artifact_for(args.action)[1]
             inputs[name] = write_bytes(output / "work" / name, raw, 0o700)
         receipt["inputs"] = inputs
         native = args.native.resolve(strict=True)
@@ -554,9 +566,7 @@ def main(args: argparse.Namespace) -> int:
         process = receipt["process"]
         require(process["failure"] is None and process["returncode"] == 0, "phase process failed")
         if args.action.startswith("compile-"):
-            artifact = (
-                output / "work" / ("hip-smoke" if args.action == "compile-smoke" else "topk-bench")
-            )
+            artifact = output / "work" / artifact_for(args.action)[1]
             require(
                 file_bytes(artifact, MAX_FILE).startswith(b"\x7fELF"),
                 "compiler did not produce ELF",
