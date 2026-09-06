@@ -261,6 +261,7 @@ def command_for(action: str) -> list[str]:
         "--hip-path=/sdk",
         "--offload-arch=gfx1151",
         "-std=c++17",
+        "-O3",
     ]
     if action == "compile-smoke":
         return [*compiler, "/input/hip_smoke.cpp", "-o", "/work/hip-smoke"]
