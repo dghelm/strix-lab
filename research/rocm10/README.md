@@ -65,6 +65,42 @@ before allocation. Host tests additionally exercise actual kernel bodies with
 emulated block/wave synchronization across ties, signed zeros and partial rows;
 the GPU timing experiment remains limited to finite, distinct values.
 
+## Third iteration: one wave per row
+
+A 32-thread shuffle reduction eliminates shared memory and block-wide barriers.
+It reads longer rows with a stride of 32. Its baseline is the frozen small-block
+variant from the second iteration, not the bitonic adapter or llama's argmax.
+
+| Rows | Columns | Baseline / one-wave, trial 1 | Baseline / one-wave, trial 2 |
+| ---: | ---: | ---: | ---: |
+| 1 | 32 | 1.036× | 1.034× |
+| 1 | 256 | 0.840× | 0.838× |
+| 1 | 1024 | 0.513× | 0.515× |
+| 64 | 32 | 1.032× | 1.033× |
+| 64 | 256 | 0.845× | 0.847× |
+| 64 | 1024 | 0.511× | 0.513× |
+
+The short-row improvement is about 3%, while 1024-column rows are roughly 1.95×
+slower. Do not replace the wider-row implementation with this candidate.
+[Third-iteration results](results/2026-09-05-k1-onewave.json) retain all 480 raw
+samples from two runs, including regressions. All six cases in each run passed
+pre/post CPU-oracle checks. The same finite-distinct research scope and timing
+limitations apply.
+
+### Relationship to Halo llama
+
+Current `halo-box/strix-llama.cpp` already uses warp-shuffle argmax reductions and
+32-thread dispatch for short rows. Greedy backend sampling calls that argmax;
+our sort-versus-reduction speedup does not measure an improvement over it. HIP
+TOP_K remains a separate sorting/copying path without a K=1 shortcut. None of
+these research kernels has been ported into that repository.
+
+The [upstream comparison](../../docs/rocm-k1-upstream-overlap.md) pins source and
+call-site evidence. Before claiming a useful integration, measure actual K=1
+TOP_K/ARGSORT usage and compare with the existing argmax implementation at real
+workload sizes. These experiments demonstrate the local research loop, not a
+new argmax algorithm or an end-to-end llama speedup.
+
 ## Measurement method
 
 `topk_k1_compare.cpp` preflights all six inputs before GPU allocation and checks both
@@ -125,9 +161,15 @@ exposes only the selected KFD/render nodes and reviewed read-only sysfs paths.
 Every phase rechecks the retained SDK; output directories are exclusive and bounded.
 
 The original `compile-k1` / `run-k1` actions reproduce the first bitonic-versus-K1
-experiment. Useful next experiments include one-wave short-row reductions,
-small-K specializations, and a separately qualified rocPRIM comparison. Change
-one factor at a time and preserve the oracle.
+experiment. For the third iteration, edit `topk_k1_onewave.hpp`, use
+`compile-k1-onewave` / `run-k1-onewave`, and substitute
+`topk-k1-onewave-compare` for the executable name above. Keep the variants header
+frozen because it supplies this experiment's baseline and shuffle helpers.
+
+The next useful step is comparison with Halo's existing kernels and real call
+shapes. Small-K specializations and a separately qualified rocPRIM comparison
+remain candidates after that check. Change one factor at a time and preserve
+the oracle.
 
 ## Checks
 
