@@ -79,6 +79,8 @@ def test_fixed_argv_boundary(tmp_path):
         "run-k1",
         "compile-k1-variants",
         "run-k1-variants",
+        "compile-k1-onewave",
+        "run-k1-onewave",
     ):
         args = m.bwrap_argv(action, tmp_path, tmp_path / "native", "1:2", {}, {}, True)
         assert args[0] == "/usr/bin/bwrap"
@@ -157,7 +159,7 @@ def test_receipt_inside_lease_and_release(tmp_path, monkeypatch, failure):
     assert not active
 
 
-@pytest.mark.parametrize("artifact", ["k1", "k1-variants"])
+@pytest.mark.parametrize("artifact", ["k1", "k1-variants", "k1-onewave"])
 def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
     source, binary = m.artifact_for(f"compile-{artifact}")
     command = m.command_for(f"compile-{artifact}")
@@ -182,6 +184,9 @@ def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
         ("k1-variants", None),
         ("k1-variants", "topk_k1.hpp"),
         ("k1-variants", "topk_k1_variants.hpp"),
+        ("k1-onewave", None),
+        ("k1-onewave", "topk_k1_variants.hpp"),
+        ("k1-onewave", "topk_k1_onewave.hpp"),
     ],
 )
 def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header):
@@ -195,8 +200,11 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header)
         source: b"// inert source",
         "topk_k1.hpp": b"// pinned K1 header",
     }
-    if artifact == "k1-variants":
+    if artifact in ("k1-variants", "k1-onewave"):
         contents["topk_k1_variants.hpp"] = b"// pinned variants header"
+    if artifact == "k1-onewave":
+        del contents["topk_k1.hpp"]
+        contents["topk_k1_onewave.hpp"] = b"// pinned onewave header"
     for name, data in contents.items():
         if name != missing_header:
             (fixtures / name).write_bytes(data)
@@ -239,7 +247,14 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header)
 
 
 @pytest.mark.parametrize(
-    "artifact,bad_digest", [("k1", False), ("k1-variants", False), ("k1-variants", True)]
+    "artifact,bad_digest",
+    [
+        ("k1", False),
+        ("k1-variants", False),
+        ("k1-variants", True),
+        ("k1-onewave", False),
+        ("k1-onewave", True),
+    ],
 )
 def test_k1_run_copies_only_pinned_binary(tmp_path, monkeypatch, artifact, bad_digest):
     _, binary_name = m.artifact_for(f"run-{artifact}")
