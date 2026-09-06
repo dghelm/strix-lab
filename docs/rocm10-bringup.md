@@ -445,6 +445,41 @@ makes no fsync/durability promise. Quiescent operator ownership remains a requir
 named probes and binding checks do not provide atomic protection against hostile
 same-UID writers, transient mount/ABA replacement, or post-observation mutation.
 
+### GNU quarantine adapter (unqualified)
+
+`extract_gnu_quarantine` takes the same five descriptor/name arguments as the
+strict extractor and explicitly selects the reviewed GNU profile. The original
+`extract_quarantine` default and `QuarantineResultV1` remain strict POSIX. Both
+use the same guarded tree creation, provisional writer, finalization, projection
+and retained-failure lifecycle. A separate internal deployment entry describes
+filesystem expectations; GNU wire evidence is never converted into fabricated
+POSIX V1 entries.
+
+The first complete GNU inspection validates hardlink sources and total copy
+budgets before any mkdir. Pass two writes only actual regular wire payloads and
+compares original GNU headers/end entries. Exact second-manifest equality,
+including compressed digest and copy projection, is required before any copy,
+symlink or final mode. Root and long-name controls create no filesystem entries.
+
+Each hardlink projection becomes a new exclusive `0600` regular file. The source
+must match its captured created device/inode, operator ownership, regular type,
+link count one, temporary `0600` mode and projected size. Guarded O_PATH and
+read-only/nonblocking opens must agree. Stored metadata names must be observed
+empty before and after copying, with stable held/named identities. Reads and
+checked writes use at most 64 KiB at a time; exact size, EOF and SHA-256 must match
+the copy projection. The destination has its own captured inode and must retain
+link count one, observed-empty metadata and the exact written size. No `os.link`
+operation, source link traversal, adoption or cleanup occurs.
+
+Copies finish before symlinks and final modes. Final inventory explicitly maps
+wire hardlinks to independent regular files with their projected size/hash and
+mode; all existing ownership, metadata, binding and exact-member checks apply.
+The root stays `0700`. The separate `GnuQuarantineResultV1` retains the original
+GNU manifest and prefix inventory, fixes `materialization_policy` to
+`independent-hardlink-copies-v1`, and preserves structural-only scope, unknown
+metadata coverage and unchecked link closure. This adapter is validated with
+synthetic archives; it adds no installation, metadata admission or SDK execution.
+
 ### Extraction and copy contract
 
 The future, separately reviewed implementation must be descriptor anchored and

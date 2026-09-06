@@ -7,6 +7,7 @@ replacement. Failures leave a new quarantine in place, without cleanup or reuse.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import stat
 from collections.abc import Iterator
@@ -20,12 +21,19 @@ from strixlab.rocm_archive import (
     ArchiveEntryV1,
     ArchiveError,
     ArchiveManifestV1,
+    GnuArchiveEntryV1,
+    GnuArchiveManifestV1,
     _consume_archive,
+    _consume_gnu_archive,
+    _GnuProvisionalEnd,
+    _GnuProvisionalEvent,
+    _GnuProvisionalStart,
     _ProvisionalChunk,
     _ProvisionalEnd,
     _ProvisionalEvent,
     _ProvisionalStart,
     inspect_archive,
+    inspect_gnu_archive,
 )
 from strixlab.rocm_metadata import (
     InodeIdentityV1,
@@ -70,6 +78,69 @@ class QuarantineResultV1(BaseModel):
     inventory: PrefixInventoryV1
 
 
+class GnuQuarantineResultV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    schema_version: Literal[1] = 1
+    validation: Literal["complete"] = "complete"
+    scope: Literal["structural-quarantine-only"] = "structural-quarantine-only"
+    materialization_policy: Literal["independent-hardlink-copies-v1"] = (
+        "independent-hardlink-copies-v1"
+    )
+    metadata_coverage: Literal["unknown"] = "unknown"
+    link_closure: Literal["not-checked"] = "not-checked"
+    archive: GnuArchiveManifestV1
+    inventory: PrefixInventoryV1
+
+
+@dataclass(frozen=True, slots=True)
+class _DeploymentEntry:
+    """Filesystem expectations, without manufacturing archive wire evidence."""
+
+    path: str
+    kind: Literal["file", "directory", "symlink"]
+    mode: int
+    size: int
+    sha256: str | None
+    link_target: str | None
+    copy_source: str | None = None
+
+
+def _deployment(manifest: ArchiveManifestV1 | GnuArchiveManifestV1) -> tuple[_DeploymentEntry, ...]:
+    copies = (
+        {copy.path: copy for copy in manifest.hardlink_copies}
+        if isinstance(manifest, GnuArchiveManifestV1)
+        else {}
+    )
+    entries: list[_DeploymentEntry] = []
+    for entry in manifest.entries:
+        if entry.kind == "hardlink":
+            copy = copies[entry.path]
+            entries.append(
+                _DeploymentEntry(
+                    entry.path,
+                    "file",
+                    copy.mode,
+                    copy.materialized_size_bytes,
+                    copy.materialized_sha256,
+                    None,
+                    copy.source_path,
+                )
+            )
+        else:
+            entries.append(
+                _DeploymentEntry(
+                    entry.path,
+                    entry.kind,
+                    entry.mode,
+                    entry.payload_size_bytes,
+                    entry.sha256,
+                    entry.link_target,
+                )
+            )
+    return tuple(entries)
+
+
 def _text(value: str, maximum: int) -> None:
     if not isinstance(value, str) or len(value) > maximum:
         raise QuarantineError("quarantine-text-limit")
@@ -87,8 +158,8 @@ def _leaf(name: str) -> None:
         raise QuarantineError("quarantine-leaf")
 
 
-def _preflight(manifest: ArchiveManifestV1) -> None:
-    for entry in manifest.entries:
+def _preflight(entries: tuple[_DeploymentEntry, ...]) -> None:
+    for entry in entries:
         _text(entry.path, _MAX_PATH_BYTES)
         parts = entry.path.split("/")
         if len(parts) > _MAX_DEPTH:
@@ -220,7 +291,29 @@ class _Tree:
                 os.fchmod(readable, 0o700)
                 _observe(readable, parent, name)
 
-    def final_mode(self, entry: ArchiveEntryV1) -> None:
+    def new_file(self, parent: int, name: str, path: str) -> int:
+        """Return a caller-owned exclusive descriptor; close it on every failure."""
+        fd = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=parent,
+        )
+        try:
+            identity = _identity(os.fstat(fd))
+            self.created[path] = _created(identity)
+            _check_inode(identity, self.owner, "file")
+            if stat.S_IMODE(identity.mode) & 0o600 != 0o600:
+                raise QuarantineError("quarantine-creation-owner-permissions")
+            _observe(fd, parent, name)
+            os.fchmod(fd, 0o600)
+            _observe(fd, parent, name)
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def final_mode(self, entry: _DeploymentEntry) -> None:
         parent_path, _, name = entry.path.rpartition("/")
         with self.directory(parent_path) as parent:
             flags = os.O_RDONLY | (os.O_DIRECTORY if entry.kind == "directory" else os.O_NONBLOCK)
@@ -238,8 +331,8 @@ class _Tree:
 @dataclass
 class _Writer:
     tree: _Tree
-    expected: dict[str, ArchiveEntryV1]
-    active: ArchiveEntryV1 | None = None
+    expected: dict[str, ArchiveEntryV1 | GnuArchiveEntryV1]
+    active: ArchiveEntryV1 | GnuArchiveEntryV1 | None = None
     fd: int | None = None
     written: int = 0
     completed: set[str] = field(default_factory=set)
@@ -249,8 +342,8 @@ class _Writer:
             fd, self.fd = self.fd, None
             os.close(fd)
 
-    def consume(self, event: _ProvisionalEvent) -> None:
-        if isinstance(event, _ProvisionalStart):
+    def consume(self, event: _ProvisionalEvent | _GnuProvisionalEvent) -> None:
+        if isinstance(event, (_ProvisionalStart, _GnuProvisionalStart)):
             header = event.header
             expected = self.expected.get(header.path)
             if (
@@ -264,20 +357,7 @@ class _Writer:
             if expected.kind == "file":
                 parent_path, _, name = expected.path.rpartition("/")
                 with self.tree.directory(parent_path) as parent:
-                    self.fd = os.open(
-                        name,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                        0o600,
-                        dir_fd=parent,
-                    )
-                    identity = _identity(os.fstat(self.fd))
-                    self.tree.created[expected.path] = _created(identity)
-                    _check_inode(identity, self.tree.owner, "file")
-                    if stat.S_IMODE(identity.mode) & 0o600 != 0o600:
-                        raise QuarantineError("quarantine-creation-owner-permissions")
-                    _observe(self.fd, parent, name)
-                    os.fchmod(self.fd, 0o600)
-                    _observe(self.fd, parent, name)
+                    self.fd = self.tree.new_file(parent, name, expected.path)
         elif isinstance(event, _ProvisionalChunk):
             if (
                 self.active is None
@@ -287,14 +367,8 @@ class _Writer:
                 or self.written + len(event.data) > self.active.payload_size_bytes
             ):
                 raise QuarantineError("quarantine-second-chunk-mismatch")
-            pending = memoryview(event.data)
-            while pending:
-                count = os.write(self.fd, pending)
-                if not 0 < count <= len(pending):
-                    raise QuarantineError("quarantine-write-progress")
-                self.written += count
-                pending = pending[count:]
-        elif isinstance(event, _ProvisionalEnd):
+            self.written += _write_all(self.fd, event.data)
+        elif isinstance(event, (_ProvisionalEnd, _GnuProvisionalEnd)):
             if self.active is None or event.entry != self.active:
                 raise QuarantineError("quarantine-second-entry-mismatch")
             if self.active.kind == "file":
@@ -313,8 +387,10 @@ class _Writer:
             self.active = None
 
 
-def _project(manifest: ArchiveManifestV1, inventory: PrefixInventoryV1, tree: _Tree) -> None:
-    expected = {entry.path: entry for entry in manifest.entries}
+def _project(
+    entries: tuple[_DeploymentEntry, ...], inventory: PrefixInventoryV1, tree: _Tree
+) -> None:
+    expected = {entry.path: entry for entry in entries}
     if (
         inventory.member_count != len(expected)
         or len(inventory.entries) != len(expected)
@@ -329,7 +405,7 @@ def _project(manifest: ArchiveManifestV1, inventory: PrefixInventoryV1, tree: _T
         kind = archive.kind if archive else "directory"
         mode = archive.mode if archive else 0o700
         length = (
-            archive.payload_size_bytes
+            archive.size
             if archive and kind == "file"
             else len(archive.link_target.encode("utf-8"))
             if archive and archive.link_target is not None
@@ -349,6 +425,56 @@ def _project(manifest: ArchiveManifestV1, inventory: PrefixInventoryV1, tree: _T
             raise QuarantineError("quarantine-final-entry-mismatch")
 
 
+def _write_all(fd: int, data: bytes) -> int:
+    pending = memoryview(data)
+    while pending:
+        count = os.write(fd, pending)
+        if not 0 < count <= len(pending):
+            raise QuarantineError("quarantine-write-progress")
+        pending = pending[count:]
+    return len(data)
+
+
+def _copy_regular(tree: _Tree, entry: _DeploymentEntry) -> None:
+    """Copy an earlier regular member; all links remain uncreated at this stage."""
+    assert entry.copy_source is not None
+    source_parent, _, source_name = entry.copy_source.rpartition("/")
+    target_parent, _, target_name = entry.path.rpartition("/")
+    with ExitStack() as resources:
+        parent = resources.enter_context(tree.directory(source_parent))
+        held = resources.enter_context(_opened(parent, source_name, os.O_PATH))
+        before = _identity(os.fstat(held))
+        _check_inode(before, tree.owner, "file", tree.created[entry.copy_source])
+        if before.size != entry.size or stat.S_IMODE(before.mode) != 0o600:
+            raise QuarantineError("quarantine-copy-source-mismatch")
+        source = resources.enter_context(_opened(parent, source_name, os.O_RDONLY | os.O_NONBLOCK))
+        if _identity(os.fstat(source)) != before or _observe(source, parent, source_name) != before:
+            raise QuarantineError("quarantine-copy-source-drift")
+        destination = resources.enter_context(tree.directory(target_parent))
+        target = tree.new_file(destination, target_name, entry.path)
+        resources.callback(os.close, target)
+        if tree.created[entry.path] == tree.created[entry.copy_source]:
+            raise QuarantineError("quarantine-copy-inode-alias")
+        digest = hashlib.sha256()
+        remaining = entry.size
+        written = 0
+        while remaining:
+            data = os.read(source, min(remaining, _CHUNK_BYTES))
+            if not data or len(data) > min(remaining, _CHUNK_BYTES):
+                raise QuarantineError("quarantine-copy-size-mismatch")
+            digest.update(data)
+            remaining -= len(data)
+            written += _write_all(target, data)
+        if os.read(source, 1) or digest.hexdigest() != entry.sha256:
+            raise QuarantineError("quarantine-copy-content-mismatch")
+        if _observe(source, parent, source_name) != before or _identity(os.fstat(held)) != before:
+            raise QuarantineError("quarantine-copy-source-drift")
+        identity = _observe(target, destination, target_name)
+        _check_inode(identity, tree.owner, "file", tree.created[entry.path])
+        if identity.size != written or written != entry.size:
+            raise QuarantineError("quarantine-copy-size-mismatch")
+
+
 def extract_quarantine(
     archive_parent_fd: int,
     archive_name: str,
@@ -356,6 +482,47 @@ def extract_quarantine(
     destination_parent_name: str,
     quarantine_name: str,
 ) -> QuarantineResultV1:
+    """Create one new strict POSIX structural quarantine, retaining failures."""
+    result = _extract_quarantine(
+        archive_parent_fd,
+        archive_name,
+        destination_grandparent_fd,
+        destination_parent_name,
+        quarantine_name,
+        "ustar",
+    )
+    assert isinstance(result, QuarantineResultV1)
+    return result
+
+
+def extract_gnu_quarantine(
+    archive_parent_fd: int,
+    archive_name: str,
+    destination_grandparent_fd: int,
+    destination_parent_name: str,
+    quarantine_name: str,
+) -> GnuQuarantineResultV1:
+    """Explicit GNU quarantine opt-in with exclusive independent hardlink copies."""
+    result = _extract_quarantine(
+        archive_parent_fd,
+        archive_name,
+        destination_grandparent_fd,
+        destination_parent_name,
+        quarantine_name,
+        "gnu",
+    )
+    assert isinstance(result, GnuQuarantineResultV1)
+    return result
+
+
+def _extract_quarantine(
+    archive_parent_fd: int,
+    archive_name: str,
+    destination_grandparent_fd: int,
+    destination_parent_name: str,
+    quarantine_name: str,
+    profile: Literal["ustar", "gnu"],
+) -> QuarantineResultV1 | GnuQuarantineResultV1:
     """Create one new structural quarantine; every post-mkdir failure retains it."""
 
     retained: str | None = None
@@ -368,8 +535,13 @@ def extract_quarantine(
             resources.callback(os.close, archive_parent)
             grandparent = os.dup(destination_grandparent_fd)
             resources.callback(os.close, grandparent)
-            first = inspect_archive(archive_parent, archive_name)
-            _preflight(first)
+            first = (
+                inspect_gnu_archive(archive_parent, archive_name)
+                if profile == "gnu"
+                else inspect_archive(archive_parent, archive_name)
+            )
+            deployment = _deployment(first)
+            _preflight(deployment)
             owner = os.geteuid(), os.getegid()
             parent_held = resources.enter_context(
                 _opened(grandparent, destination_parent_name, os.O_PATH)
@@ -389,7 +561,7 @@ def extract_quarantine(
             retained = quarantine_name
             tree.new_directory(parent, quarantine_name, "")
             directories = sorted(
-                (entry for entry in first.entries if entry.kind == "directory"),
+                (entry for entry in deployment if entry.kind == "directory"),
                 key=lambda entry: (entry.path.count("/"), entry.path.encode("utf-8")),
             )
             for entry in directories:
@@ -399,7 +571,11 @@ def extract_quarantine(
                     tree.new_directory(directory, name, entry.path)
             writer = _Writer(tree, {entry.path: entry for entry in first.entries})
             try:
-                second = _consume_archive(archive_parent, archive_name, writer.consume)
+                second = (
+                    _consume_gnu_archive(archive_parent, archive_name, writer.consume)
+                    if profile == "gnu"
+                    else _consume_archive(archive_parent, archive_name, writer.consume)
+                )
             finally:
                 writer.close()
             if (
@@ -408,7 +584,10 @@ def extract_quarantine(
                 or second.canonical_bytes() != first.canonical_bytes()
             ):
                 raise QuarantineError("quarantine-second-manifest-mismatch")
-            for entry in first.entries:
+            for entry in deployment:
+                if entry.copy_source is not None:
+                    _copy_regular(tree, entry)
+            for entry in deployment:
                 if entry.kind == "symlink":
                     assert entry.link_target is not None
                     parent_path, _, name = entry.path.rpartition("/")
@@ -419,19 +598,21 @@ def extract_quarantine(
                             tree.created[entry.path] = _created(identity)
                             _check_inode(identity, owner, "symlink")
                             _observe(fd, directory, name)
-            for entry in first.entries:
+            for entry in deployment:
                 if entry.kind == "file":
                     tree.final_mode(entry)
             for entry in reversed(directories):
                 tree.final_mode(entry)
             inventory = inspect_prefix(parent, quarantine_name)
-            _project(first, inventory, tree)
+            _project(deployment, inventory, tree)
             with _opened(parent, quarantine_name, os.O_PATH) as root:
                 if _identity(os.fstat(root)) != inventory.root.identity:
                     raise QuarantineError("quarantine-binding-drift")
             after = _observe(parent, grandparent, destination_parent_name)
             if _stable_parent(after) != _stable_parent(before):
                 raise QuarantineError("quarantine-parent-drift")
+            if isinstance(first, GnuArchiveManifestV1):
+                return GnuQuarantineResultV1(archive=first, inventory=inventory)
             return QuarantineResultV1(archive=first, inventory=inventory)
     except BaseException as exc:
         if isinstance(exc, QuarantineError):
