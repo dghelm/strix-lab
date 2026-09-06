@@ -143,6 +143,9 @@ void run(Resources& r, json& report) {
     report["hip_driver_version"] = driver;
     if (std::strncmp(p.gcnArchName, "gfx1151", 7) || (p.gcnArchName[7] && p.gcnArchName[7] != ':'))
         throw std::runtime_error("device-architecture-mismatch");
+    // HIP exposes domain/bus/device here; function 0 is checked by launcher preflight.
+    if (p.pciDomainID != 0 || p.pciBusID != 0xc2 || p.pciDeviceID != 0)
+        throw std::runtime_error("device-pci-mismatch");
     check(hipStreamCreate(&r.stream), "create-stream");
     check(hipEventCreate(&r.start), "create-start");
     check(hipEventCreate(&r.stop), "create-stop");
@@ -179,6 +182,10 @@ void run(Resources& r, json& report) {
                 result[is_candidate ? "candidate_us_per_launch" : "baseline_us_per_launch"].push_back(us);
             }
         }
+        check(hipStreamSynchronize(r.stream), "post-timing-sync");
+        validate(r, in, false);
+        validate(r, in, true);
+        result["post_timing_correctness"] = true;
         result["baseline_median_us"] = median(baseline);
         result["candidate_median_us"] = median(candidate);
     }
@@ -189,7 +196,7 @@ int main() {
     json report = {{"schema_version", 1}, {"fixture", "rocm10-topk-k1-compare-v1"},
         {"scope", "private-research-only; not fixed-v1 or provider qualification"},
         {"generator", "research-distinct-shuffle-v1"}, {"metadata_coverage", "unknown"},
-        {"vendor_authenticity", "unverified"}, {"success", false}, {"comparison_eligible", false},
+        {"vendor_authenticity", "unverified"}, {"success", false}, {"research_comparison_valid", false},
         {"hip_compile_version", {HIP_VERSION_MAJOR, HIP_VERSION_MINOR, HIP_VERSION_PATCH}},
         {"requested_device_allocation_bytes", allocated_bytes},
         {"external_limits_required", {{"wall_seconds", 30}, {"cpu_seconds", 20}, {"device_bytes", 268435456}}},
@@ -211,8 +218,16 @@ int main() {
     report["loaded_paths_complete"] = captured == 0 && !loader.overflow;
     if (captured != 0 || loader.overflow) success = false;
     report["success"] = success;
-    report["comparison_eligible"] = success;
-    std::cout << report.dump(-1, ' ', false, json::error_handler_t::replace) << '\n';
+    report["research_comparison_valid"] = success;
+    try {
+        const auto serialized = report.dump(); // Strict UTF-8; never rewrite evidence bytes.
+        std::cout << serialized << '\n';
+    } catch (const std::exception&) {
+        success = false;
+        std::cout << "{\"fixture\":\"rocm10-topk-k1-compare-v1\",\"success\":false,"
+                     "\"research_comparison_valid\":false,\"loaded_paths_complete\":false,"
+                     "\"failure\":\"json-serialization-failed\"}\n";
+    }
     std::cout.flush();
     return success && std::cout.good() ? 0 : 1;
 }
