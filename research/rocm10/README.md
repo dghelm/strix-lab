@@ -125,6 +125,63 @@ and connects it to the choice of primitive; it does not repeat that study.
 The profiled source is the older `ca94157` ROCm 7.2.4 control, separate from the
 current Halo source inspection and private ROCm 10 primitive experiments.
 
+## Corrected GDN q/k normalization fusion
+
+The next experiment follows Qwen3.5's actual recurrent-layer operations. The
+reference is a bounded extraction of current Halo `c7af5c6`:
+`RMS_NORM(eps / 128)` then `SCALE(1 / sqrtf(128))`, separately for q and k.
+The candidate combines the four launches into one while retaining the same
+256-thread reduction order, separate q/k epsilon, FP32 intermediate rounding,
+and scale-plus-zero-bias operation. It does not use the older L2 epsilon formula.
+
+Both implementations use 128-wide rows, 16 q/k heads, one sequence, and the
+model's interleaved layout: 8192 floats per token, with k starting 2048 floats
+after q. Inputs are deterministic synthetic values; model weights are not loaded.
+
+Captured graph results on `gfx1151`, microseconds per complete q/k provider call:
+
+| Tokens | Reference, trial 1 | Fused, trial 1 | Ratio, trial 1 | Reference, trial 2 | Fused, trial 2 | Ratio, trial 2 |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 8.174 | 2.507 | 3.261× | 8.193 | 2.528 | 3.241× |
+| 16 | 10.919 | 4.989 | 2.189× | 10.865 | 4.994 | 2.175× |
+| 512 | 131.665 | 109.086 | 1.207× | 130.217 | 106.190 | 1.226× |
+
+Each graph contains 100 calls on fixed inputs; capture and instantiation are
+excluded. Each shape also has separate direct-dispatch measurements. Both modes
+use five warmup batches and 20 alternating measurement pairs. These are two
+independent processes using the same executable, with 480 raw timing samples
+in total. [Portable results](results/2026-09-05-gdn-norm.json) preserve both modes,
+all samples, source/binary identities, and phase receipts.
+
+Every case passed bitwise GPU reference/candidate parity before and after timing,
+as well as a float64 corrected-formula check. Additional two-sequence diagnostics
+cover signed zero, near-epsilon, tiny, large, and mixed values with unequal q/k
+epsilon. Output/scratch guards and input-integrity checks passed. The float64
+thresholds are diagnostic tolerances, not a proven bound for all finite inputs;
+GPU bitwise parity is a separate requirement. Host tests execute the actual kernel
+bodies with emulated barriers/shuffles and check invalid geometry and aliasing.
+
+This is a measured standalone primitive improvement, not a full llama speedup.
+The captured batches are not llama token graphs, and the extracted reference has
+not been qualified against a compiled current Halo backend. Full integration
+still needs graph-matcher/consumer guards and model recurrence, logits, and token
+parity checks. Clocks, power, and unrelated GPU clients remain uncontrolled.
+
+To reproduce, use the existing launcher with fresh output directories:
+
+```bash
+PYTHONPATH=src .venv/bin/python research/rocm10/run.py compile-gdn-norm \
+  --output "$STRIX_TRIAL_DIR/build" --diagnostic
+PYTHONPATH=src .venv/bin/python research/rocm10/run.py run-gdn-norm \
+  --binary "$STRIX_TRIAL_DIR/build/work/gdn-norm-compare" \
+  --binary-sha256 REPLACE_WITH_EXECUTABLE_SHA256 \
+  --output "$STRIX_TRIAL_DIR/run"
+```
+
+Set `STRIX_TRIAL_DIR` to a new existing parent directory first. Apply the same
+compile dependency review and runtime receipt checks described below. This adds
+no SDK installation or global configuration changes.
+
 ## Measurement method
 
 `topk_k1_compare.cpp` preflights all six inputs before GPU allocation and checks both
@@ -200,7 +257,7 @@ the oracle.
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest \
   research/rocm10/test_launcher.py research/rocm10/test_preflight.py \
-  research/rocm10/test_k1_variants.py -q
+  research/rocm10/test_k1_variants.py research/rocm10/test_gdn_norm.py -q
 .venv/bin/ruff check research/rocm10
 .venv/bin/ruff format --check research/rocm10
 MYPYPATH=src .venv/bin/mypy research/rocm10/run.py research/rocm10/preflight_exec.py
