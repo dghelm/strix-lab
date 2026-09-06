@@ -1,9 +1,9 @@
 # Private ROCm 10 execution plan
 
-Status: preparation only, 2026-09-05. No ROCm 10 SDK program or GPU workload has
-been executed. This plan covers implementation and execution through HIP smoke,
-TOPK correctness, and capsule timing. Commands are implementation specifications;
-the launcher and HIP provider do not exist yet.
+Prepared on 2026-09-05 before SDK execution. This plan covers implementation and
+execution through HIP smoke, TOPK correctness, and capsule timing. The initial
+commands were implementation specifications; executable research fixtures and
+launcher now live under `research/rocm10/`. See the runtime amendment below.
 
 ## Scope amendment
 
@@ -213,3 +213,19 @@ checks and accepted execution amendment. First runtime deliverable: evidenced HI
 smoke. Final deliverable: oracle-qualified TOPK capsule result with reproducible
 identity and raw timings. Failed gates remain recorded failures, not eligibility.
 Preserve completed quarantine and existing control throughout.
+
+## Runtime amendment: DRM character-device aliases
+
+The first isolated GPU smoke failed in `hipGetDeviceCount` with error 100 and
+`amdgpu_get_auth` diagnostics, before launching a kernel. The reviewed correction
+adds only read-only `/sys/dev/char` to the existing GPU sysfs set. Preflight checks
+its ro/nosuid/nodev flags, absence of unexpected submounts, and that `226:128` is
+the same sysfs node as `/sys/class/drm/renderD128`; its `device/drm` path must exist.
+No extra device node or permission is introduced.
+
+The Linux implementation of `drmNodeIsDRM` checks the character-device alias path;
+`drmGetNodeTypeFromFd` rejects a descriptor when that check fails. See the
+[libdrm source mirror](https://android.googlesource.com/platform/external/libdrm/+/refs/heads/main/xf86drm.c#3315).
+This explains why the alias mapping is required even with `/sys/devices` mounted.
+The correction received independent isolation review before retrying the same
+smoke binary. `-O3` is used for fixture compilation, without fast-math flags.

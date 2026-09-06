@@ -15,7 +15,7 @@ import sys
 
 NAMESPACES = ("user", "mnt", "pid", "ipc", "net")
 READ_ONLY = {"/usr", "/sdk", "/input", "/native", "/run/empty"}
-SYSFS = {"/sys/devices", "/sys/class/kfd", "/sys/class/drm", "/sys/bus/pci"}
+SYSFS = {"/sys/devices", "/sys/class/kfd", "/sys/class/drm", "/sys/bus/pci", "/sys/dev/char"}
 BASE_DEVICES = {"/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty"}
 GPU_DEVICES = {"/dev/kfd", "/dev/dri/renderD128"}
 
@@ -103,6 +103,8 @@ def check(args: argparse.Namespace) -> dict[str, object]:
             require(stat.S_ISCHR(value.st_mode) and actual == expected_devices[path], f"GPU node mismatch: {path}")
             devices[path] = actual
         require(os.path.realpath("/sys/class/drm/renderD128/device").endswith("/0000:c2:00.0"), "GPU PCI mapping mismatch")
+        require(os.path.samefile("/sys/dev/char/226:128", "/sys/class/drm/renderD128"), "render sysfs alias mismatch")
+        require(Path("/sys/dev/char/226:128/device/drm").is_dir(), "missing libdrm classification path")
         properties = Path("/sys/class/kfd/kfd/topology/nodes/1/properties").read_text()
         values = dict(line.split(maxsplit=1) for line in properties.splitlines() if " " in line)
         require(values.get("drm_render_minor") == "128" and values.get("gfx_target_version") == "110501", "KFD target mismatch")
