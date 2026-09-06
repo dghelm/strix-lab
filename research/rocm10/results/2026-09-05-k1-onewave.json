@@ -1,0 +1,1941 @@
+{
+  "schema_version": 1,
+  "artifact": "rocm10-private-research-k1-onewave-comparison",
+  "date": "2026-09-05",
+  "date_timezone": "America/Chicago",
+  "evidence_directory_id": "rocm10-20260906T012829Z",
+  "scope": "Private research comparison of frozen small K1 against the one-wave candidate; not a fixed-v1 capsule benchmark, provider qualification or llama.cpp comparison.",
+  "metadata_coverage": "unknown",
+  "vendor_authenticity": "unverified",
+  "providers": {
+    "baseline": {
+      "label": "small",
+      "entry_point": "strixlab_topk_k1_small_hip",
+      "source": "research/rocm10/topk_k1_variants.hpp",
+      "description": "Frozen small K1 shared-memory reduction: 32 threads for columns <= 32, otherwise 256."
+    },
+    "candidate": {
+      "label": "onewave",
+      "entry_point": "strixlab_topk_k1_onewave_hip",
+      "source": "research/rocm10/topk_k1_onewave.hpp",
+      "description": "One 32-thread block per row for all widths <= 1024; strided loads and reviewed width-32 value/index shuffle reduction. Requires warp size 32."
+    }
+  },
+  "build": {
+    "evidence": {
+      "status": "process-complete",
+      "process": {
+        "elapsed_seconds": 4.901480400934815,
+        "failure": null,
+        "log_bytes": 197590,
+        "returncode": 0
+      },
+      "diagnostic": true,
+      "before": {
+        "bytes": 87465955,
+        "evidence_bytes_charged": 177169192,
+        "member_count": 27627,
+        "path": "prefix-before.json",
+        "physical_equal": true,
+        "resolved_links": 305,
+        "semantic_equal": true,
+        "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+      },
+      "after": {
+        "bytes": 87465955,
+        "evidence_bytes_charged": 177169192,
+        "member_count": 27627,
+        "path": "prefix-after.json",
+        "physical_equal": true,
+        "resolved_links": 305,
+        "semantic_equal": true,
+        "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+      },
+      "launcher_sha256": "e591886e47a81c4b4e9de1394c4328e0efd673a2ae184d8929ac81421adea231",
+      "bwrap_sha256": "6ad2138a73d592acb43525432965e3c66f6fad8a2f3d610c6ca0b6855e993cbe",
+      "inputs": {
+        "preflight_exec.py": {
+          "bytes": 8886,
+          "path": "preflight_exec.py",
+          "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+        },
+        "topk_k1_onewave.hpp": {
+          "bytes": 1746,
+          "path": "topk_k1_onewave.hpp",
+          "sha256": "042699c855b6675d438bb1ef5381965a6485d163024c70e925bd46c023193fe1"
+        },
+        "topk_k1_onewave_compare.cpp": {
+          "bytes": 12370,
+          "path": "topk_k1_onewave_compare.cpp",
+          "sha256": "baefbe05768d87f52be7c992e206c765ae8f9b676aa26b9b892f2b214e5c477c"
+        },
+        "topk_k1_variants.hpp": {
+          "bytes": 5179,
+          "path": "topk_k1_variants.hpp",
+          "sha256": "2c9e17a1a3333e985896977d5b0efe80889244c91c76c91fe49a72641811b922"
+        }
+      },
+      "outputs": [
+        {
+          "bytes": 8886,
+          "path": "input/preflight_exec.py",
+          "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+        },
+        {
+          "bytes": 1746,
+          "path": "input/topk_k1_onewave.hpp",
+          "sha256": "042699c855b6675d438bb1ef5381965a6485d163024c70e925bd46c023193fe1"
+        },
+        {
+          "bytes": 12370,
+          "path": "input/topk_k1_onewave_compare.cpp",
+          "sha256": "baefbe05768d87f52be7c992e206c765ae8f9b676aa26b9b892f2b214e5c477c"
+        },
+        {
+          "bytes": 5179,
+          "path": "input/topk_k1_variants.hpp",
+          "sha256": "2c9e17a1a3333e985896977d5b0efe80889244c91c76c91fe49a72641811b922"
+        },
+        {
+          "bytes": 87465955,
+          "path": "prefix-after.json",
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        {
+          "bytes": 87465955,
+          "path": "prefix-before.json",
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        {
+          "bytes": 195678,
+          "path": "stderr.log",
+          "sha256": "7a0071827518ffc00de024e1912daad79e8077eee1ac93d77c5dda07955be84e"
+        },
+        {
+          "bytes": 1912,
+          "path": "stdout.log",
+          "sha256": "8d9c4bcc28640da315e851c028695795c31ce470d225768f1f250e1ad649f2a2"
+        },
+        {
+          "bytes": 195704,
+          "path": "work/topk-k1-onewave-compare",
+          "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+        }
+      ],
+      "limits": {
+        "compiler_virtual_bytes": 17179869184,
+        "cpu_seconds": 240,
+        "log_bytes": 16777216,
+        "per_file_bytes": 536870912,
+        "prefix_evidence_bytes": 268435456,
+        "requested_gpu_bytes": 0,
+        "total_output_bytes": 1073741824,
+        "wall_seconds": 300
+      },
+      "phase": "compile-k1-onewave-01",
+      "phase_sha256": "3ccba6652ef9a1622b7d770bb505dccad44bd03f607db0e64d9e4a34a3a4ee18",
+      "lock_release": null
+    },
+    "compiler_argv": [
+      "/sdk/lib/llvm/bin/clang++",
+      "-x",
+      "hip",
+      "--rocm-path=/sdk",
+      "--hip-path=/sdk",
+      "--offload-arch=gfx1151",
+      "-std=c++17",
+      "-O3",
+      "-I/native",
+      "/input/topk_k1_onewave_compare.cpp",
+      "/native/reference.cpp",
+      "-lcrypto",
+      "-o",
+      "/work/topk-k1-onewave-compare"
+    ],
+    "executable": {
+      "bytes": 195704,
+      "path": "work/topk-k1-onewave-compare",
+      "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+    },
+    "source_inputs": {
+      "preflight_exec.py": {
+        "bytes": 8886,
+        "path": "preflight_exec.py",
+        "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+      },
+      "topk_k1_onewave.hpp": {
+        "bytes": 1746,
+        "path": "topk_k1_onewave.hpp",
+        "sha256": "042699c855b6675d438bb1ef5381965a6485d163024c70e925bd46c023193fe1"
+      },
+      "topk_k1_onewave_compare.cpp": {
+        "bytes": 12370,
+        "path": "topk_k1_onewave_compare.cpp",
+        "sha256": "baefbe05768d87f52be7c992e206c765ae8f9b676aa26b9b892f2b214e5c477c"
+      },
+      "topk_k1_variants.hpp": {
+        "bytes": 5179,
+        "path": "topk_k1_variants.hpp",
+        "sha256": "2c9e17a1a3333e985896977d5b0efe80889244c91c76c91fe49a72641811b922"
+      }
+    },
+    "native_files": [
+      {
+        "bytes": 2310,
+        "path": "CMakeLists.txt",
+        "sha256": "05575d546dacd7cff12af95d6fcdd630719af6171968c9d791d9ba1bd0f23fbd"
+      },
+      {
+        "bytes": 8543,
+        "path": "README.md",
+        "sha256": "b344304e29a1228c8b08e5d1fe37e51657bc269cbee7cedcef5398ace19e00f7"
+      },
+      {
+        "bytes": 1757,
+        "path": "baseline/README.md",
+        "sha256": "40c7606d4651432b8e98a402ec89b270fb895cb680556bba94c9e90a9a92176b"
+      },
+      {
+        "bytes": 1650,
+        "path": "baseline/adapter/PROVENANCE.md",
+        "sha256": "9baa652317227601e6d22817b893372fb8e06acd4cbb2819baea598f2ce12e4e"
+      },
+      {
+        "bytes": 1033,
+        "path": "baseline/adapter/compile-receipt.md",
+        "sha256": "fafee4e15b297e07ebd9da47d9450bf22f012622e76392bd20d0882742930b60"
+      },
+      {
+        "bytes": 4146,
+        "path": "baseline/adapter/hip_bitonic_topk.cu",
+        "sha256": "f8eaf6c57ac0e558323518ccf39ce951e610f34203fd3861997162e510e57672"
+      },
+      {
+        "bytes": 1127,
+        "path": "baseline/adapter/hip_bitonic_topk.hpp",
+        "sha256": "c1b8d9b4cf69dff5056eb5f2233ab01821766bb4972ecafe2814e2131b63e319"
+      },
+      {
+        "bytes": 1546,
+        "path": "baseline/provenance.json",
+        "sha256": "65f13076322e73756b73bd30a7071709327b0416cfb6a33055a9dc616fdcc883"
+      },
+      {
+        "bytes": 1078,
+        "path": "baseline/upstream/LICENSE",
+        "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "bytes": 13110,
+        "path": "baseline/upstream/argsort.cu",
+        "sha256": "ef88c979b7dda6a15a789df11dfc0f15566c725d653229851c95df3bf23b92b2"
+      },
+      {
+        "bytes": 950,
+        "path": "baseline/upstream/argsort.cuh",
+        "sha256": "fece4f9312dc2757ab85472366e026ca035344afba412daca2f97fbf89df477a"
+      },
+      {
+        "bytes": 63110,
+        "path": "baseline/upstream/common.cuh",
+        "sha256": "af2bf79c832015090f186ae8aca2a7af4343cc9d9b9d52ed09060a6728692b87"
+      },
+      {
+        "bytes": 4533,
+        "path": "baseline/upstream/top-k.cu",
+        "sha256": "88db287bcb1c4949b101bf53fcfd0d68d6af065c3d22404ef3a2f2de023adda4"
+      },
+      {
+        "bytes": 100,
+        "path": "baseline/upstream/top-k.cuh",
+        "sha256": "3dc6221a33577372fe7f907aeeb395fb20ed0a6e6543efd8f03cd9dce7b82b08"
+      },
+      {
+        "bytes": 274,
+        "path": "capsule_main.cpp",
+        "sha256": "13a353174afaadbaf10029552ad7f994c4376b86c974b25c7bdfaa7fe4cdf3e3"
+      },
+      {
+        "bytes": 10538,
+        "path": "capsule_transport.cpp",
+        "sha256": "25e5971506753955972092e5de314879591b736122082d8f3964eeb3ce080898"
+      },
+      {
+        "bytes": 138,
+        "path": "capsule_transport.hpp",
+        "sha256": "29ad05a7a085d964686ef5abaa2625b71608d186eaa45580cc58b0973f37fc7e"
+      },
+      {
+        "bytes": 2389,
+        "path": "host_fixture.cpp",
+        "sha256": "cf041aaefc8ad2b1f4a0b08f8b9546d67146335251c070402ea2c63a53e04157"
+      },
+      {
+        "bytes": 691,
+        "path": "host_fixture.hpp",
+        "sha256": "a72905add44c14ec8acf1869f7e69ef468d8fbd11093291e493c2aa285f5cae0"
+      },
+      {
+        "bytes": 7789,
+        "path": "reference.cpp",
+        "sha256": "65ecb31854c98b52b9cbab5174a280c527bd6c83bc45114ab3c7cdcee4d7f762"
+      },
+      {
+        "bytes": 1310,
+        "path": "reference.hpp",
+        "sha256": "c16593de56f10efb91f9ed9bf11da65786d6e5004072fdf2a30d1d48e424cc23"
+      },
+      {
+        "bytes": 1076,
+        "path": "third_party/nlohmann/LICENSE.MIT",
+        "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+      },
+      {
+        "bytes": 953436,
+        "path": "third_party/nlohmann/json.hpp",
+        "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"
+      },
+      {
+        "bytes": 652,
+        "path": "third_party/nlohmann/provenance.json",
+        "sha256": "9954c8da38c2b429ad813bb51820d92f8f1ad54d4655c284c7b0f0b731c986ea"
+      }
+    ],
+    "archive_observed_sha256": "4feabd9f2da72352df37f6d714a54847d3fe913c0341fbe2a6542c1164024baf",
+    "quarantine_result_sha256": "08f153a04c921e4d8a9429e3e92b58a43c7134e710259d6e66eb01c37c927eb4",
+    "note": "Compile phase used loader diagnostics and required no GPU lease; measured runs disabled diagnostics."
+  },
+  "analysis": {
+    "trials_pooled": false,
+    "raw_samples_preserved": true,
+    "sample_count": 480,
+    "sample_units": "microseconds per launch; each raw sample is HIP event elapsed time for a batch of 100 launches divided by 100",
+    "median_definition": "Arithmetic mean of sorted samples at zero-based positions 9 and 10, separately for each provider, shape and trial.",
+    "ratio_definition": "baseline_median_us / candidate_median_us; greater than 1 means a lower candidate median. Ratio of medians, not median of paired ratios.",
+    "verification": [
+      "All compile and run receipt output byte counts and SHA-256 hashes verified against evidence files.",
+      "All three phases process-complete with return code 0 and no process failure; actual prefix evidence hashes match before/after and receipts report physical and semantic equality.",
+      "Both measured runs diagnostic=false, empty stderr, preflight passed, exclusive GPU lease held through phase receipt and released with matching phase SHA-256.",
+      "Executable identical across both trials, matching compile output; comparator and one-wave header match reviewed hashes, baseline variants header matches previous variants comparison compile.",
+      "Both providers passed CPU bit-value/index validation before and after timing in every case.",
+      "All 480 raw samples finite and positive; all 24 medians recomputed exactly and 12 baseline/candidate ratios calculated separately.",
+      "Shape, seed and input digest match across trials, and the original K1 comparison inputs.",
+      "Device identity, HIP versions and complete loader path list match across trials; loader path list matches prior K1 run."
+    ],
+    "limitations": [
+      "Only six K=1 shapes and one deterministic distinct finite F32 input per shape on one gfx1151 device; no ties, NaNs or general-K qualification.",
+      "Two trials remain separate with no pooling, confidence intervals, statistical significance or broad workload claims.",
+      "The modest 32-column timing differences are descriptive observations; these two trials do not establish statistical significance. The wider-row regressions are preserved in full.",
+      "Provider measurement order alternates within each pair; shape order is fixed and system drift remains a possible influence.",
+      "HIP event batch timings include provider stream work and possible host enqueue gaps; they are not pure kernel latency. Input transfer, CPU validation, allocation and event creation are excluded.",
+      "The baseline here is our previous small function. No llama.cpp implementation, bitonic adapter, rocPRIM or separate control comparison was measured.",
+      "The upstream investigation reported by the coordinating reviewers found existing llama.cpp argmax already uses a warp/single-wave approach and greedy selection uses argmax. This artifact makes no argmax novelty or performance claim over llama.cpp. See docs/rocm-k1-upstream-overlap.md for the separately maintained source investigation.",
+      "Loaded paths are observations; metadata coverage remains unknown and vendor authenticity unverified.",
+      "External host/library hash snapshot checks reported by the root reviewer are not independently certified by this artifact; phase output files and loader path observations were independently checked.",
+      "Receipt hashes identify external evidence. Large prefix evidence files, executable and library contents are not embedded in this portable artifact."
+    ],
+    "observations": [
+      "Against the frozen small baseline, one-wave median batch time per launch is about 3% lower at 32 columns in both trials.",
+      "At 256 columns, one-wave median time is about 18-19% higher; at 1024 columns it is about 1.95 times the small baseline time. These regressions rule out treating this candidate as a general winner for the six tested shapes.",
+      "These are descriptive per-case observations across two separate trials, not pooled estimates or a comparison with llama.cpp."
+    ]
+  },
+  "trials": [
+    {
+      "trial": "trial1",
+      "evidence": {
+        "status": "process-complete",
+        "process": {
+          "elapsed_seconds": 0.5452727938536555,
+          "failure": null,
+          "log_bytes": 11882,
+          "returncode": 0
+        },
+        "diagnostic": false,
+        "before": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-before.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "after": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-after.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "launcher_sha256": "e591886e47a81c4b4e9de1394c4328e0efd673a2ae184d8929ac81421adea231",
+        "bwrap_sha256": "6ad2138a73d592acb43525432965e3c66f6fad8a2f3d610c6ca0b6855e993cbe",
+        "inputs": {
+          "preflight_exec.py": {
+            "bytes": 8886,
+            "path": "preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          "topk-k1-onewave-compare": {
+            "bytes": 195704,
+            "path": "topk-k1-onewave-compare",
+            "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+          }
+        },
+        "outputs": [
+          {
+            "bytes": 8886,
+            "path": "input/preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-after.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-before.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 0,
+            "path": "stderr.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 11882,
+            "path": "stdout.log",
+            "sha256": "7c4096e79a525de20ddfce1a78fe5f3b341fbf8e1db8b37aee82b69f63f8def4"
+          },
+          {
+            "bytes": 195704,
+            "path": "work/topk-k1-onewave-compare",
+            "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+          }
+        ],
+        "limits": {
+          "compiler_virtual_bytes": null,
+          "cpu_seconds": 20,
+          "log_bytes": 16777216,
+          "per_file_bytes": 536870912,
+          "prefix_evidence_bytes": 268435456,
+          "requested_gpu_bytes": 268435456,
+          "total_output_bytes": 1073741824,
+          "wall_seconds": 30
+        },
+        "phase": "run-k1-onewave-01",
+        "phase_sha256": "43a2ff9d7cf701e5b317dccea104d3eef2366dbc7f47dced01e48d773535f3b6",
+        "lock_release": {
+          "method": "exclusive_lock context exited",
+          "path": "/tmp/strixlab-gpu.lock",
+          "phase_sha256": "43a2ff9d7cf701e5b317dccea104d3eef2366dbc7f47dced01e48d773535f3b6",
+          "released": true,
+          "sha256": "a7cb27ada985e2063618b99ba11cf8478664e82973224347bf6afcbac59f7cab"
+        }
+      },
+      "preflight": {
+        "event": "preflight_pass",
+        "gid": 1000,
+        "gpu_devices": {
+          "/dev/dri/renderD128": [
+            226,
+            128
+          ],
+          "/dev/kfd": [
+            237,
+            0
+          ]
+        },
+        "metadata_coverage": "unknown",
+        "mounts": [
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/usr"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/sdk"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/input"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/native"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/work"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/run/empty"
+          },
+          {
+            "filesystem": "proc",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/proc"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/dev"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/null"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/zero"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/full"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/random"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/urandom"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/tty"
+          },
+          {
+            "filesystem": "devpts",
+            "flags": [
+              "rw",
+              "nosuid",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/dev/pts"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/tmp"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/kfd"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/dri/renderD128"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/devices"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/kfd"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/drm"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/bus/pci"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/dev/char"
+          }
+        ],
+        "namespaces": {
+          "ipc": "ipc:[4026533195]",
+          "mnt": "mnt:[4026533133]",
+          "net": "net:[4026533207]",
+          "pid": "pid:[4026533205]",
+          "user": "user:[4026533325]"
+        },
+        "phase": "gpu",
+        "sdk_identity": [
+          56,
+          146139371
+        ],
+        "seccomp": "0",
+        "uid": 1000,
+        "vendor_authenticity": "unverified"
+      },
+      "measurement": {
+        "baseline_entry_point": "strixlab_topk_k1_small_hip",
+        "candidate_entry_points": {
+          "onewave": "strixlab_topk_k1_onewave_hip"
+        },
+        "cases": [
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.2571250051259995,
+            "baseline_us_per_launch": [
+              2.4698199331760406,
+              2.2537200152873993,
+              2.257319986820221,
+              2.254129946231842,
+              2.256930023431778,
+              2.756040096282959,
+              2.750929892063141,
+              2.2553299367427826,
+              2.257329970598221,
+              2.2757600247859955,
+              2.552269995212555,
+              2.238900065422058,
+              2.2384899854660034,
+              2.2481200098991394,
+              2.242099940776825,
+              3.107289969921112,
+              2.2653499245643616,
+              2.2461099922657013,
+              2.2453099489212036,
+              2.266550064086914
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.177779972553253,
+            "candidate_us_per_launch": [
+              3.1507599353790283,
+              2.8819701075553894,
+              2.1775799989700317,
+              2.1779799461364746,
+              2.199629992246628,
+              2.6461398601531982,
+              2.4442799389362335,
+              2.17397004365921,
+              2.174779921770096,
+              2.1751800179481506,
+              2.8079399466514587,
+              2.96642005443573,
+              2.174379974603653,
+              2.172369956970215,
+              2.192409932613373,
+              2.468719929456711,
+              2.1683600544929504,
+              2.1731799840927124,
+              2.1679599583148956,
+              2.176779955625534
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022556199382085,
+            "input_digest": "964fd7c2a0996a4ddb3278276cbd073b4c6dccef45c161bef934be6e6a35021d",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 1.0364339068100261
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.455890029668808,
+            "baseline_us_per_launch": [
+              2.587130069732666,
+              2.4556900560855865,
+              2.4476799368858337,
+              2.4428699910640717,
+              2.4484799802303314,
+              2.9876700043678284,
+              2.4560900032520294,
+              2.4581000208854675,
+              2.450080066919327,
+              2.472520023584366,
+              2.8850698471069336,
+              2.4504800140857697,
+              2.449280023574829,
+              2.446479946374893,
+              2.45168998837471,
+              3.1526699662208557,
+              2.7479299902915955,
+              2.5185099244117737,
+              2.4480800330638885,
+              2.9182401299476624
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.925350069999695,
+            "candidate_us_per_launch": [
+              3.0128100514411926,
+              3.0115100741386414,
+              2.9105201363563538,
+              2.914929986000061,
+              2.9482001066207886,
+              2.9257500171661377,
+              2.911730110645294,
+              2.9209500551223755,
+              2.926959991455078,
+              2.919740080833435,
+              2.934969961643219,
+              2.916939854621887,
+              2.9305601119995117,
+              2.924950122833252,
+              2.9257500171661377,
+              2.970629930496216,
+              2.908119857311249,
+              2.9017099738121033,
+              2.927359938621521,
+              2.909719944000244
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022556199382373,
+            "input_digest": "1d585111f3212e785b7fb386f067246d0c08ebed75472683fde098755f379097",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 0.8395200474824075
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.800524979829788,
+            "baseline_us_per_launch": [
+              2.777479887008667,
+              2.794710099697113,
+              2.799929976463318,
+              2.795509994029999,
+              2.7935099601745605,
+              2.8580299019813538,
+              2.8011199831962585,
+              2.8059300780296326,
+              2.7959099411964417,
+              2.8179600834846497,
+              3.2090699672698975,
+              2.797519862651825,
+              2.7979201078414917,
+              2.8095299005508423,
+              2.7939099073410034,
+              2.8063398599624634,
+              2.797510027885437,
+              2.8111401200294495,
+              2.8031298518180847,
+              2.805129885673523
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 5.45557975769043,
+            "candidate_us_per_launch": [
+              5.44035017490387,
+              5.486040115356445,
+              5.45557975769043,
+              5.440359711647034,
+              5.486840009689331,
+              5.484840273857117,
+              5.45557975769043,
+              5.432329773902893,
+              5.463190078735352,
+              5.431939959526062,
+              5.4611897468566895,
+              5.472009778022766,
+              5.45557975769043,
+              5.444759726524353,
+              5.4836297035217285,
+              5.498059988021851,
+              5.4611897468566895,
+              5.443959832191467,
+              5.449169874191284,
+              5.454379916191101
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022556199381093,
+            "input_digest": "ebddd99fc20914022af9a118ae8781002cdd04c306feff2ef0a37b3aca9c14f5",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 0.5133322404245017
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.2499199956655502,
+            "baseline_us_per_launch": [
+              2.3901699483394623,
+              2.2461099922657013,
+              2.259339988231659,
+              2.244510054588318,
+              2.2401000559329987,
+              2.24932000041008,
+              2.2561299800872803,
+              2.2505199909210205,
+              2.24932000041008,
+              2.2777700424194336,
+              2.279369980096817,
+              2.2376999258995056,
+              2.261340022087097,
+              2.254530042409897,
+              2.2485199570655823,
+              2.2461099922657013,
+              2.24931001663208,
+              2.257329970598221,
+              2.24932000041008,
+              2.278970032930374
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.179979979991913,
+            "candidate_us_per_launch": [
+              3.4843799471855164,
+              2.1771900355815887,
+              2.1779899299144745,
+              2.2725600004196167,
+              2.204039990901947,
+              2.1984200179576874,
+              2.17398002743721,
+              2.179189920425415,
+              2.178789973258972,
+              2.181600034236908,
+              2.17958003282547,
+              2.181989997625351,
+              2.1783900260925293,
+              2.176779955625534,
+              2.209639996290207,
+              2.2028300166130066,
+              2.1803799271583557,
+              2.1751800179481506,
+              2.178789973258972,
+              2.1811899542808533
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022285616442437,
+            "input_digest": "7e54156e4ae39c0987220d992373fc6f65c8dc42e54bef634c7ad98963949364",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 1.0320828706298013
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.5053849816322327,
+            "baseline_us_per_launch": [
+              2.499369978904724,
+              2.499369978904724,
+              2.499369978904724,
+              2.5110000371932983,
+              2.50218003988266,
+              2.504589855670929,
+              2.5061801075935364,
+              2.5009799003601074,
+              2.506980001926422,
+              2.529819905757904,
+              2.5105899572372437,
+              2.5029700994491577,
+              2.5061801075935364,
+              2.5089898705482483,
+              2.501780092716217,
+              2.504580020904541,
+              2.509790062904358,
+              2.504580020904541,
+              2.5109899044036865,
+              2.5358399748802185
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.966025024652481,
+            "candidate_us_per_launch": [
+              2.9778501391410828,
+              2.9658299684524536,
+              2.9586100578308105,
+              2.9610100388526917,
+              2.9894599318504333,
+              2.9894599318504333,
+              2.960209846496582,
+              2.9537999629974365,
+              2.9690399765968323,
+              2.96983003616333,
+              2.972640097141266,
+              2.9686298966407776,
+              2.9638200998306274,
+              2.962220013141632,
+              2.9886698722839355,
+              2.9990899562835693,
+              2.964619994163513,
+              2.960209846496582,
+              2.961820065975189,
+              2.9662200808525085
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022285616442725,
+            "input_digest": "dfb9e71b152e61d990c2a30aa9e4d02d71f3372f53d6b57745bfb8427d8bcfbc",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 0.8446944853156726
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.8726500272750854,
+            "baseline_us_per_launch": [
+              2.8716498613357544,
+              2.8684499859809875,
+              2.8708499670028687,
+              2.8664499521255493,
+              2.8708499670028687,
+              2.8716498613357544,
+              2.872850000858307,
+              2.8752601146698,
+              2.857629954814911,
+              2.900109887123108,
+              2.888079881668091,
+              2.8740599751472473,
+              2.872450053691864,
+              2.870050072669983,
+              2.870450019836426,
+              2.8732600808143616,
+              2.87445992231369,
+              2.8764599561691284,
+              2.8780698776245117,
+              2.8856799006462097
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 5.617475211620331,
+            "candidate_us_per_launch": [
+              5.607860088348389,
+              5.622680187225342,
+              5.606650114059448,
+              5.613059997558594,
+              5.6635600328445435,
+              5.677189826965332,
+              5.612660050392151,
+              5.602250099182129,
+              5.606650114059448,
+              5.611460208892822,
+              5.615469813346863,
+              5.619069933891296,
+              5.62067985534668,
+              5.61627984046936,
+              5.656750202178955,
+              5.677980184555054,
+              5.617470145225525,
+              5.62749981880188,
+              5.621089935302734,
+              5.617480278015137
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022285616441445,
+            "input_digest": "4212de40d216507494cd35f0acb4b9da0031355998a872221e78e4ba4a04cdcf",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 0.5113774283031477
+          }
+        ],
+        "cleanup_errors": [],
+        "comparison_order": "six shapes; small baseline paired with onewave candidate",
+        "device": {
+          "architecture": "gfx1151",
+          "name": "AMD Radeon 8060S Graphics",
+          "pci_bus": 194,
+          "pci_device": 0,
+          "pci_domain": 0,
+          "warp_size": 32
+        },
+        "device_count": 1,
+        "external_limits_required": {
+          "cpu_seconds": 20,
+          "device_bytes": 268435456,
+          "wall_seconds": 30
+        },
+        "failure": null,
+        "fixture": "rocm10-topk-k1-onewave-compare-v1",
+        "generator": "research-distinct-shuffle-v1",
+        "hip_compile_version": [
+          7,
+          15,
+          26333
+        ],
+        "hip_driver_version": 71526333,
+        "hip_runtime_version": 71526333,
+        "launches_per_batch": 100,
+        "loaded_paths": [
+          "",
+          "linux-vdso.so.1",
+          "/usr/lib/libcrypto.so.3",
+          "/sdk/lib/libamdhip64.so.7",
+          "/usr/lib/libstdc++.so.6",
+          "/usr/lib/libm.so.6",
+          "/usr/lib/libgcc_s.so.1",
+          "/usr/lib/libc.so.6",
+          "/usr/lib/libz.so.1",
+          "/usr/lib/libbrotlienc.so.1",
+          "/usr/lib/libbrotlidec.so.1",
+          "/usr/lib/libzstd.so.1",
+          "/usr/lib/libdl.so.2",
+          "/sdk/lib/librocm_kpack.so.0",
+          "/sdk/lib/librocprofiler-register.so.0",
+          "/usr/lib/librt.so.1",
+          "/sdk/lib/libamd_comgr.so.3",
+          "/sdk/lib/libhsa-runtime64.so.1",
+          "/usr/lib/libpthread.so.0",
+          "/lib64/ld-linux-x86-64.so.2",
+          "/usr/lib/libbrotlicommon.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1",
+          "/sdk/lib/llvm/lib/libclang-cpp.so.23.0git",
+          "/sdk/lib/llvm/lib/libLLVM.so.23.0git",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_elf.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm.so.2",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so.5",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so",
+          "/sdk/lib/libhsa-amd-aqlprofile64.so"
+        ],
+        "loaded_paths_complete": true,
+        "metadata_coverage": "unknown",
+        "pair_order": "even baseline,candidate; odd candidate,baseline; zero-based",
+        "paired_samples": 20,
+        "requested_device_allocation_bytes": 262656,
+        "research_comparison_valid": true,
+        "schema_version": 1,
+        "scope": "private-research-only; not fixed-v1 or provider qualification",
+        "semantics": "K=1 original column index of maximum value, finite F32 distinct values per row; CPU bit-value/index oracle; no tie/NaN/general-K qualification",
+        "success": true,
+        "timing_scope": "HIP event batch elapsed / 100; all provider stream work including possible host enqueue gaps; excludes input transfer, validation, allocation, event creation",
+        "vendor_authenticity": "unverified",
+        "warmup_batches_per_provider": 5
+      }
+    },
+    {
+      "trial": "trial2",
+      "evidence": {
+        "status": "process-complete",
+        "process": {
+          "elapsed_seconds": 0.7438073218800128,
+          "failure": null,
+          "log_bytes": 11889,
+          "returncode": 0
+        },
+        "diagnostic": false,
+        "before": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-before.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "after": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-after.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "launcher_sha256": "e591886e47a81c4b4e9de1394c4328e0efd673a2ae184d8929ac81421adea231",
+        "bwrap_sha256": "6ad2138a73d592acb43525432965e3c66f6fad8a2f3d610c6ca0b6855e993cbe",
+        "inputs": {
+          "preflight_exec.py": {
+            "bytes": 8886,
+            "path": "preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          "topk-k1-onewave-compare": {
+            "bytes": 195704,
+            "path": "topk-k1-onewave-compare",
+            "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+          }
+        },
+        "outputs": [
+          {
+            "bytes": 8886,
+            "path": "input/preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-after.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-before.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 0,
+            "path": "stderr.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 11889,
+            "path": "stdout.log",
+            "sha256": "a0e9464c499c6d558c1ce224eba131eb01200c7e876444be649b14b3fd29b363"
+          },
+          {
+            "bytes": 195704,
+            "path": "work/topk-k1-onewave-compare",
+            "sha256": "2af26315585ebb03db4e3ca1dff5b0a9ea8406c7321f002dc480dda7e0df0b9c"
+          }
+        ],
+        "limits": {
+          "compiler_virtual_bytes": null,
+          "cpu_seconds": 20,
+          "log_bytes": 16777216,
+          "per_file_bytes": 536870912,
+          "prefix_evidence_bytes": 268435456,
+          "requested_gpu_bytes": 268435456,
+          "total_output_bytes": 1073741824,
+          "wall_seconds": 30
+        },
+        "phase": "run-k1-onewave-02",
+        "phase_sha256": "446ff764e5656a472cc1aa368ed01a28f2f8d3ff40b83fe9832f009f06604e21",
+        "lock_release": {
+          "method": "exclusive_lock context exited",
+          "path": "/tmp/strixlab-gpu.lock",
+          "phase_sha256": "446ff764e5656a472cc1aa368ed01a28f2f8d3ff40b83fe9832f009f06604e21",
+          "released": true,
+          "sha256": "0a88c374e8bda4e0b18d570d8ad42272002de080ae5bab84fb58f119c468bc41"
+        }
+      },
+      "preflight": {
+        "event": "preflight_pass",
+        "gid": 1000,
+        "gpu_devices": {
+          "/dev/dri/renderD128": [
+            226,
+            128
+          ],
+          "/dev/kfd": [
+            237,
+            0
+          ]
+        },
+        "metadata_coverage": "unknown",
+        "mounts": [
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/usr"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/sdk"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/input"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/native"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/work"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/run/empty"
+          },
+          {
+            "filesystem": "proc",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/proc"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/dev"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/null"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/zero"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/full"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/random"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/urandom"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/tty"
+          },
+          {
+            "filesystem": "devpts",
+            "flags": [
+              "rw",
+              "nosuid",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/dev/pts"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/tmp"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/kfd"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/dri/renderD128"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/devices"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/kfd"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/drm"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/bus/pci"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/dev/char"
+          }
+        ],
+        "namespaces": {
+          "ipc": "ipc:[4026533195]",
+          "mnt": "mnt:[4026533133]",
+          "net": "net:[4026533207]",
+          "pid": "pid:[4026533205]",
+          "user": "user:[4026533325]"
+        },
+        "phase": "gpu",
+        "sdk_identity": [
+          56,
+          146139371
+        ],
+        "seccomp": "0",
+        "uid": 1000,
+        "vendor_authenticity": "unverified"
+      },
+      "measurement": {
+        "baseline_entry_point": "strixlab_topk_k1_small_hip",
+        "candidate_entry_points": {
+          "onewave": "strixlab_topk_k1_onewave_hip"
+        },
+        "cases": [
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.2473300248384476,
+            "baseline_us_per_launch": [
+              2.2429199516773224,
+              2.2477300465106964,
+              2.2469300031661987,
+              2.2629599273204803,
+              2.24932998418808,
+              2.236109972000122,
+              2.239309996366501,
+              2.246530055999756,
+              2.248529940843582,
+              2.2729699313640594,
+              2.2481299936771393,
+              2.2573499381542206,
+              2.2409099340438843,
+              2.243320047855377,
+              2.2477300465106964,
+              2.2425200045108795,
+              2.248930037021637,
+              2.246519923210144,
+              2.246920019388199,
+              2.2777900099754333
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.1727899461984634,
+            "candidate_us_per_launch": [
+              2.1723799407482147,
+              2.170789986848831,
+              2.173600047826767,
+              2.17399001121521,
+              2.199240028858185,
+              2.1932199597358704,
+              2.1731899678707123,
+              2.171590030193329,
+              2.16838002204895,
+              2.171590030193329,
+              2.166379988193512,
+              2.1723899245262146,
+              2.1703800559043884,
+              2.1796000003814697,
+              2.2028400003910065,
+              2.19883993268013,
+              2.1731899678707123,
+              2.1703900396823883,
+              2.163970023393631,
+              2.173600047826767
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022556199382085,
+            "input_digest": "964fd7c2a0996a4ddb3278276cbd073b4c6dccef45c161bef934be6e6a35021d",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 1.0343061595854677
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.4509000033140182,
+            "baseline_us_per_launch": [
+              2.441679984331131,
+              2.4496999382972717,
+              2.444480061531067,
+              2.4476899206638336,
+              2.4456900358200073,
+              2.458910048007965,
+              2.4625200033187866,
+              2.4420900642871857,
+              2.4501000344753265,
+              2.473749965429306,
+              2.4609099328517914,
+              2.4496999382972717,
+              2.458920031785965,
+              2.446489930152893,
+              2.458910048007965,
+              2.4525099992752075,
+              2.4472999572753906,
+              2.45169997215271,
+              2.4552999436855316,
+              2.4753500521183014
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.9229649901390076,
+            "candidate_us_per_launch": [
+              2.9133498668670654,
+              2.916949987411499,
+              2.921369969844818,
+              2.9177498817443848,
+              2.9409998655319214,
+              2.9377898573875427,
+              2.9229599237442017,
+              2.9173600673675537,
+              2.9249700903892517,
+              2.914550006389618,
+              2.9209598898887634,
+              2.924569845199585,
+              2.919360101222992,
+              2.9249700903892517,
+              2.9429998993873596,
+              2.944200038909912,
+              2.9237601161003113,
+              2.9101499915122986,
+              2.9229700565338135,
+              2.9281800985336304
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022556199382373,
+            "input_digest": "1d585111f3212e785b7fb386f067246d0c08ebed75472683fde098755f379097",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 0.8384978990793388
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.8073500096797943,
+            "baseline_us_per_launch": [
+              2.7831101417541504,
+              2.803950011730194,
+              2.8103598952293396,
+              2.807149887084961,
+              2.811160087585449,
+              2.809160053730011,
+              2.809560000896454,
+              2.8051498532295227,
+              2.8059500455856323,
+              2.8223800659179688,
+              2.8075501322746277,
+              2.8135699033737183,
+              2.8051498532295227,
+              2.8075599670410156,
+              2.80474990606308,
+              2.8023499250411987,
+              2.803950011730194,
+              2.8059500455856323,
+              2.8179800510406494,
+              2.818779945373535
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 5.4548197984695435,
+            "candidate_us_per_launch": [
+              5.46002984046936,
+              5.453609824180603,
+              5.45041024684906,
+              5.4475998878479,
+              5.508509874343872,
+              5.510910153388977,
+              5.46442985534668,
+              5.450400114059448,
+              5.45602023601532,
+              5.445600152015686,
+              5.454810261726379,
+              5.459219813346863,
+              5.463629961013794,
+              5.448809862136841,
+              5.49809992313385,
+              5.501700043678284,
+              5.4475998878479,
+              5.450000166893005,
+              5.4548197984695435,
+              5.4548197984695435
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022556199381093,
+            "input_digest": "ebddd99fc20914022af9a118ae8781002cdd04c306feff2ef0a37b3aca9c14f5",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 0.5146549498239065
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.250330001115799,
+            "baseline_us_per_launch": [
+              2.2509299218654633,
+              2.270970046520233,
+              2.246129959821701,
+              2.2549399733543396,
+              2.2397099435329437,
+              2.246119976043701,
+              2.246530055999756,
+              2.243320047855377,
+              2.244119942188263,
+              2.2725699841976166,
+              2.2633500397205353,
+              2.2509299218654633,
+              2.2449199855327606,
+              2.2505299746990204,
+              2.2501300275325775,
+              2.253739982843399,
+              2.2453199326992035,
+              2.2481299936771393,
+              2.2601500153541565,
+              2.2797800600528717
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.178799957036972,
+            "candidate_us_per_launch": [
+              2.1755899488925934,
+              2.179200053215027,
+              2.174389958381653,
+              2.1731899678707123,
+              2.1996399760246277,
+              2.2152599692344666,
+              2.178400009870529,
+              2.1800099313259125,
+              2.1876099705696106,
+              2.1755899488925934,
+              2.174389958381653,
+              2.193620055913925,
+              2.174389958381653,
+              2.178799957036972,
+              2.2152599692344666,
+              2.2120599448680878,
+              2.17399001121521,
+              2.184409946203232,
+              2.1751900017261505,
+              2.178799957036972
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022285616442437,
+            "input_digest": "7e54156e4ae39c0987220d992373fc6f65c8dc42e54bef634c7ad98963949364",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 1.0328300190422728
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.5164200365543365,
+            "baseline_us_per_launch": [
+              2.5106099247932434,
+              2.5182300806045532,
+              2.52142995595932,
+              2.5154200196266174,
+              2.5029900670051575,
+              2.5158199667930603,
+              2.5875499844551086,
+              2.519429922103882,
+              2.5198298692703247,
+              2.531850039958954,
+              3.007420003414154,
+              2.528640031814575,
+              2.517020106315613,
+              2.509410083293915,
+              2.5057899951934814,
+              2.5110098719596863,
+              2.5130200386047363,
+              2.5150099396705627,
+              2.5086000561714172,
+              2.537449896335602
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 2.9716549813747406,
+            "candidate_us_per_launch": [
+              2.9830700159072876,
+              2.971459925174713,
+              2.974660098552704,
+              2.9662400484085083,
+              2.9982998967170715,
+              3.0159300565719604,
+              2.96985000371933,
+              2.9654398560523987,
+              2.959829866886139,
+              2.971850037574768,
+              3.0111199617385864,
+              2.96985000371933,
+              2.9706498980522156,
+              2.969450056552887,
+              2.9830798506736755,
+              2.979069948196411,
+              2.974259853363037,
+              2.959429919719696,
+              2.956629991531372,
+              2.972249984741211
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022285616442725,
+            "input_digest": "dfb9e71b152e61d990c2a30aa9e4d02d71f3372f53d6b57745bfb8427d8bcfbc",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 0.8468076046264953
+          },
+          {
+            "baseline": "small",
+            "baseline_median_us": 2.8874999284744263,
+            "baseline_us_per_launch": [
+              2.974959909915924,
+              2.887299954891205,
+              2.871679961681366,
+              2.8756800293922424,
+              2.8836899995803833,
+              2.9382899403572083,
+              2.889699935913086,
+              2.876879870891571,
+              2.8760799765586853,
+              2.8977200388908386,
+              3.4290000796318054,
+              2.8905099630355835,
+              2.8860899806022644,
+              2.874079942703247,
+              2.9161500930786133,
+              2.881689965724945,
+              2.936590015888214,
+              2.8752800822257996,
+              2.8876999020576477,
+              2.909739911556244
+            ],
+            "candidate": "onewave",
+            "candidate_median_us": 5.62952995300293,
+            "candidate_us_per_launch": [
+              5.614299774169922,
+              5.685129761695862,
+              5.622720122337341,
+              5.621119737625122,
+              5.655980110168457,
+              5.66199004650116,
+              5.633140206336975,
+              5.622720122337341,
+              5.614699721336365,
+              5.630729794502258,
+              5.635539889335632,
+              5.6275200843811035,
+              5.617510080337524,
+              5.62391996383667,
+              5.670809745788574,
+              5.69445013999939,
+              5.626720190048218,
+              5.628330111503601,
+              5.65356969833374,
+              5.6495702266693115
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022285616441445,
+            "input_digest": "4212de40d216507494cd35f0acb4b9da0031355998a872221e78e4ba4a04cdcf",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 0.5129202531259582
+          }
+        ],
+        "cleanup_errors": [],
+        "comparison_order": "six shapes; small baseline paired with onewave candidate",
+        "device": {
+          "architecture": "gfx1151",
+          "name": "AMD Radeon 8060S Graphics",
+          "pci_bus": 194,
+          "pci_device": 0,
+          "pci_domain": 0,
+          "warp_size": 32
+        },
+        "device_count": 1,
+        "external_limits_required": {
+          "cpu_seconds": 20,
+          "device_bytes": 268435456,
+          "wall_seconds": 30
+        },
+        "failure": null,
+        "fixture": "rocm10-topk-k1-onewave-compare-v1",
+        "generator": "research-distinct-shuffle-v1",
+        "hip_compile_version": [
+          7,
+          15,
+          26333
+        ],
+        "hip_driver_version": 71526333,
+        "hip_runtime_version": 71526333,
+        "launches_per_batch": 100,
+        "loaded_paths": [
+          "",
+          "linux-vdso.so.1",
+          "/usr/lib/libcrypto.so.3",
+          "/sdk/lib/libamdhip64.so.7",
+          "/usr/lib/libstdc++.so.6",
+          "/usr/lib/libm.so.6",
+          "/usr/lib/libgcc_s.so.1",
+          "/usr/lib/libc.so.6",
+          "/usr/lib/libz.so.1",
+          "/usr/lib/libbrotlienc.so.1",
+          "/usr/lib/libbrotlidec.so.1",
+          "/usr/lib/libzstd.so.1",
+          "/usr/lib/libdl.so.2",
+          "/sdk/lib/librocm_kpack.so.0",
+          "/sdk/lib/librocprofiler-register.so.0",
+          "/usr/lib/librt.so.1",
+          "/sdk/lib/libamd_comgr.so.3",
+          "/sdk/lib/libhsa-runtime64.so.1",
+          "/usr/lib/libpthread.so.0",
+          "/lib64/ld-linux-x86-64.so.2",
+          "/usr/lib/libbrotlicommon.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1",
+          "/sdk/lib/llvm/lib/libclang-cpp.so.23.0git",
+          "/sdk/lib/llvm/lib/libLLVM.so.23.0git",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_elf.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm.so.2",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so.5",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so",
+          "/sdk/lib/libhsa-amd-aqlprofile64.so"
+        ],
+        "loaded_paths_complete": true,
+        "metadata_coverage": "unknown",
+        "pair_order": "even baseline,candidate; odd candidate,baseline; zero-based",
+        "paired_samples": 20,
+        "requested_device_allocation_bytes": 262656,
+        "research_comparison_valid": true,
+        "schema_version": 1,
+        "scope": "private-research-only; not fixed-v1 or provider qualification",
+        "semantics": "K=1 original column index of maximum value, finite F32 distinct values per row; CPU bit-value/index oracle; no tie/NaN/general-K qualification",
+        "success": true,
+        "timing_scope": "HIP event batch elapsed / 100; all provider stream work including possible host enqueue gaps; excludes input transfer, validation, allocation, event creation",
+        "vendor_authenticity": "unverified",
+        "warmup_batches_per_provider": 5
+      }
+    }
+  ]
+}
