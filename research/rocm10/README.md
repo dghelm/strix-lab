@@ -101,6 +101,30 @@ TOP_K/ARGSORT usage and compare with the existing argmax implementation at real
 workload sizes. These experiments demonstrate the local research loop, not a
 new argmax algorithm or an end-to-end llama speedup.
 
+## Actual workload follow-up
+
+The recorded Qwen3.5-4B smoke server used CPU sampling (`backend_sampling: false`),
+with temperature 0 and top-k 40. Its dense model graph has no MoE selection path.
+The existing random-token `llama-bench` traces show no selection-kernel names;
+that absence describes those benchmark runs, not every possible sampler setup.
+
+Consequently, further K1 micro-optimization is not the current priority for this
+workload. [Workload priorities](../../docs/qwen35-workload-priorities.md) join the
+actual model metadata, pinned source and late-decode trace. The largest matched
+Q4_K fused feed-forward group accounts for about 23.3% of that diagnostic interval;
+the tied Q6_K output projection accounts for about 12.4%, with a 2.45 ms median
+per dispatch in the original diagnostic trace (about 2.3 ms in the follow-up
+repetitions). These are trace observations and source-supported attributions,
+not measurements of an optimization or proof of a bandwidth bottleneck.
+
+These shape results were already established in the
+[six-trial attribution study](../../field-reports/2026-09-05-qwen35-mmvq-shape-attribution.md),
+which also preserves recurring vocabulary-projection cost, sporadic stalls and
+analysis limitations. This follow-up adds the actual server sampling evidence
+and connects it to the choice of primitive; it does not repeat that study.
+The profiled source is the older `ca94157` ROCm 7.2.4 control, separate from the
+current Halo source inspection and private ROCm 10 primitive experiments.
+
 ## Measurement method
 
 `topk_k1_compare.cpp` preflights all six inputs before GPU allocation and checks both

@@ -18,7 +18,7 @@ The recorded one-slot server response explicitly reports `backend_sampling=false
 This is observed response metadata, not an assumption based on defaults:
 
 ```text
-/home/dgh/.local/share/strixlab/runs/records/run-20260905T194254Z-smoke-qwen35-680a6498d54f5de7454f18515b7f97dc/adapters/llama-server/greedy-token-parity-short-sequence/requests/0001/response.body.bin
+~/.local/share/strixlab/runs/records/run-20260905T194254Z-smoke-qwen35-680a6498d54f5de7454f18515b7f97dc/adapters/llama-server/greedy-token-parity-short-sequence/requests/0001/response.body.bin
 SHA256 d87b6097dec2cfce54c2943d1594c85bab7be4012c0ab07dbfcf00f63cb6a1a5
 ```
 
@@ -57,6 +57,34 @@ holds 256 weights, giving `2560 × 248320 / 256 × 210 = 521472000` bytes
 (**497.31 MiB**) for this matrix alone. The previous 256 MiB private kernel
 harness is not sized for a full-shape head test; the existing inference build
 already handles it. This sizing fact is not a bandwidth-bottleneck diagnosis.
+
+## Newer Halo already changes the Q6_K baseline
+
+A source comparison with `c7af5c6` finds a fused activation-quantization path
+absent from the profiled implementation. Its
+[type gate](https://github.com/halo-box/strix-llama.cpp/blob/c7af5c6c29902eb1f7b3bd7952607e2349e1c668/ggml/src/ggml-cuda/mmvq.cu#L1498-L1514)
+defaults to Q8_0/Q6_K and explicitly excludes Q4_K/Q5_K. The
+[eligibility checks](https://github.com/halo-box/strix-llama.cpp/blob/c7af5c6c29902eb1f7b3bd7952607e2349e1c668/ggml/src/ggml-cuda/mmvq.cu#L2794-L2817)
+require RDNA3.5, a single output column, aligned F32 activations/output, compatible
+fusion, K divisible by 32, and at most 16384 bytes of shared Q8_1 storage.
+K=2560 needs 2880 bytes and K=9216 needs 10368 bytes. The known Q6_K head, QKV/Q,
+and down-projection shapes therefore fit the size gate; runtime layout and other
+eligibility conditions have not been observed on this newer build.
+
+The newer code tries this path before the separate activation-quantization
+allocation/launch. Its
+[block organization](https://github.com/halo-box/strix-llama.cpp/blob/c7af5c6c29902eb1f7b3bd7952607e2349e1c668/ggml/src/ggml-cuda/mmvq.cu#L1866-L1905)
+uses one output row per wave and 16, 8, or 4 waves per block, with quantization
+repeated per block. That materially changes the old one-row/one-wave-per-block
+baseline. It is not evidence of a speedup or exact-output parity.
+
+The dominant Q4_K gate/up path is outside this default fused-quantization path.
+The newer grouped-projection path is Q8_0-only and does not cover the Q4_K/Q6_K
+groups either. The compared Q4_K/Q6_K dot-product helpers are unchanged.
+A useful next comparison is an unchanged current-Halo build against the older
+control, followed by verification of actual dispatch and clean inference
+correctness/performance. Do not invent a duplicate Q6_K fusion before evaluating
+what the target repository already supplies.
 
 ## Next unresolved question
 
