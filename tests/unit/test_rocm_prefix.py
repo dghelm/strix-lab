@@ -579,3 +579,82 @@ def test_final_binding_replacement_detected(tree, monkeypatch):
     monkeypatch.setattr(p, "_binding", binding)
     with pytest.raises(p.PrefixError, match="identity-changed"):
         p.inspect_prefix(parent, root.name)
+
+
+def test_fixed_inventory_capacity_and_exact_boundary():
+    assert p._MAX_EVIDENCE_BYTES == 256 * 1024**2
+    budget = p._Budget()
+    # Account for a measured-size workload without allocating a large fixture.
+    budget.charge(177_169_168 - budget.evidence)
+    assert budget.evidence > 128 * 1024**2
+    budget.charge(p._MAX_EVIDENCE_BYTES - budget.evidence)
+    assert budget.evidence == p._MAX_EVIDENCE_BYTES
+    with pytest.raises(p.PrefixError, match="prefix-evidence-limit"):
+        budget.charge(1)
+
+
+def test_inventory_cap_rejects_before_payload_hash(tree, monkeypatch):
+    parent, root = tree
+    baseline = p.inspect_prefix(parent, root.name)
+    entry = next(entry for entry in baseline.entries if entry.path == "d/f")
+    data = p.canonical_json_bytes(entry.model_dump(mode="json"))
+    charge = len(data) + 4 * data.count(b"\n")
+    budget = p._Budget(evidence=p._MAX_EVIDENCE_BYTES - charge + 1)
+    monkeypatch.setattr(p, "_hash_file", lambda *args: pytest.fail("hash after evidence overflow"))
+    with (
+        p._opened(budget, parent, root.name, os.O_RDONLY | os.O_DIRECTORY) as held,
+        p._opened(budget, held, "d", os.O_RDONLY | os.O_DIRECTORY) as directory,
+    ):
+        before = set(os.listdir("/proc/self/fd"))
+        with pytest.raises(p.PrefixError, match="prefix-evidence-limit"):
+            p._capture(budget, directory, "f", "d/f", None)
+        assert set(os.listdir("/proc/self/fd")) == before
+    assert budget.live_fds == 0
+
+
+def test_native_charge_includes_both_walks_and_four_name_scans(tree):
+    parent, root = tree
+    result = p.inspect_prefix(parent, root.name)
+    serialized = [
+        p.canonical_json_bytes(entry.model_dump(mode="json"))
+        for entry in (result.root, *result.entries)
+    ]
+    entry_charge = sum(len(data) + 4 * data.count(b"\n") for data in serialized)
+    names = sum(
+        len(p.canonical_json_bytes(entry.path.rsplit("/", 1)[-1])) for entry in result.entries
+    )
+    assert result.evidence_bytes_charged == 4096 + 2 * entry_charge + 4 * names
+
+
+@pytest.mark.parametrize("overflow", [False, True])
+def test_link_output_keeps_independent_fixed_cap(monkeypatch, overflow):
+    assert p._MAX_LINK_EVIDENCE_BYTES == 64 * 1024**2
+    report = inventory(
+        {"a": ("link", "."), **({"b": ("link", "."), "c": ("link", ".")} if overflow else {})}
+    )
+    original = p.canonical_json_bytes
+    link_serializations = []
+
+    class ChargedSize:
+        def __init__(self, size):
+            self.size = size
+
+        def __len__(self):
+            return self.size
+
+    def serialize(value):
+        if isinstance(value, dict) and "status" in value:
+            link_serializations.append(value["path"])
+            # Only substitute length for link-output accounting; input inventory
+            # validation and its serializer remain real. No large byte allocation.
+            return ChargedSize(p._MAX_LINK_EVIDENCE_BYTES - 4096 if value["path"] == "a" else 1)
+        return original(value)
+
+    monkeypatch.setattr(p, "canonical_json_bytes", serialize)
+    if overflow:
+        with pytest.raises(p.PrefixError, match="prefix-evidence-limit"):
+            p.resolve_inventory_links(report)
+        assert link_serializations == ["a", "b"]
+    else:
+        result = p.resolve_inventory_links(report)
+        assert [link.path for link in result.links] == ["a"]

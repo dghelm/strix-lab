@@ -374,13 +374,23 @@ replacement, hostile same-UID writers, or mutation after the scan.
 
 Collection bounds are one million descendants, 8 GiB per file, 32 GiB total file
 payload, 256 path components, 256 owned descriptors, 4096 UTF-8 bytes per path or
-link target, and 64 MiB of charged serialized evidence and enumeration buffers.
+link target, and 256 MiB of charged serialized evidence and enumeration buffers.
 Enumeration is charged before retaining/sorting names; entry evidence is validated
 and charged before hashing. File hashing uses 64 KiB reads and requires exact EOF.
 An iterative traversal checks directory membership before and after descendants;
 a final rewalk checks all bindings, identities, and metadata again. Any detected
 drift, malformed record, unsupported guarded-open ABI, or resource failure yields
 no completed inventory. These are implementation budgets, not a process RSS limit.
+
+The inventory charge is a 4096-byte envelope plus both walks' complete per-entry
+canonical JSON and indentation allowance, plus four charges for every descendant's
+serialized basename (before/after enumeration in each walk). A diagnostic-only
+measurement of the retained SDK tree estimated 177,169,168 bytes (168.9617 MiB):
+`4096 + 2 * 87,438,136 + 4 * 572,200`. This exceeds 128 MiB and leaves 91,266,288
+bytes below the fixed 256 MiB cap. The diagnostic used fixed-width zero digest
+placeholders; it is not a payload hash, completed inventory or admission, and does
+not permit reusing the failed quarantine. The increase preserves all evidence and
+accounting. Pure link-map output retains its separate fixed 64 MiB cap.
 
 `compare_prefixes(expected, observed)` validates both completed maps and compares
 only recorded semantic fields, ignoring inode numbers, timestamps, directory

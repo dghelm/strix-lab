@@ -36,7 +36,8 @@ _MAX_FILE_BYTES = 8 * 1024**3
 _MAX_PAYLOAD_BYTES = 32 * 1024**3
 _MAX_DEPTH = 256
 _MAX_FDS = 256
-_MAX_EVIDENCE_BYTES = 64 * 1024**2
+_MAX_EVIDENCE_BYTES = 256 * 1024**2
+_MAX_LINK_EVIDENCE_BYTES = 64 * 1024**2
 _MAX_PATH_BYTES = 4096
 _MAX_DIFFERENCES = 128
 _MAX_LINK_EXPANSIONS = 40
@@ -781,12 +782,14 @@ def resolve_inventory_links(inventory: PrefixInventoryV1) -> PrefixLinkMapV1:
     """Resolve only the completed map, expanding links before subsequent dot-dot."""
 
     records = _validated_map(inventory)
-    budget = _Budget()
+    evidence = 4096
     steps = [0]
     links: list[PrefixLinkV1] = []
     for entry in inventory.entries:
         if entry.kind == "symlink":
             result = _resolve_link(entry, records, steps)
-            budget.charge(len(canonical_json_bytes(result.model_dump(mode="json"))))
+            evidence += len(canonical_json_bytes(result.model_dump(mode="json")))
+            if evidence > _MAX_LINK_EVIDENCE_BYTES:
+                raise PrefixError("prefix-evidence-limit")
             links.append(result)
     return PrefixLinkMapV1(links=tuple(links), component_steps=steps[0])
