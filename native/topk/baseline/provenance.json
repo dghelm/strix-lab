@@ -1,0 +1,14 @@
+{
+  "source_repository": "https://github.com/halo-box/strix-llama.cpp.git",
+  "source_commit": "ca94157f70a2776e8da6b6849b50b45a083d0478",
+  "license": "MIT",
+  "files": [
+    {"path": "top-k.cu", "upstream_path": "ggml/src/ggml-cuda/top-k.cu", "blob": "9681cd29333819f37762e707f58d916018293a49", "sha256": "88db287bcb1c4949b101bf53fcfd0d68d6af065c3d22404ef3a2f2de023adda4"},
+    {"path": "top-k.cuh", "upstream_path": "ggml/src/ggml-cuda/top-k.cuh", "blob": "f4d8f61e5b3f14a823641883750f764c4b785024", "sha256": "3dc6221a33577372fe7f907aeeb395fb20ed0a6e6543efd8f03cd9dce7b82b08"},
+    {"path": "argsort.cu", "upstream_path": "ggml/src/ggml-cuda/argsort.cu", "blob": "26af900259721d3cd4a79c44f4a5e9c0e9e4c379", "sha256": "ef88c979b7dda6a15a789df11dfc0f15566c725d653229851c95df3bf23b92b2"},
+    {"path": "argsort.cuh", "upstream_path": "ggml/src/ggml-cuda/argsort.cuh", "blob": "3abb6448a05733d5da519d89a7b79d81a2a76315", "sha256": "fece4f9312dc2757ab85472366e026ca035344afba412daca2f97fbf89df477a"},
+    {"path": "common.cuh", "upstream_path": "ggml/src/ggml-cuda/common.cuh", "blob": "14dd1098c97b27ba07a1eab3dc5e55cd69342beb", "sha256": "af2bf79c832015090f186ae8aca2a7af4343cc9d9b9d52ed09060a6728692b87"},
+    {"path": "LICENSE", "upstream_path": "LICENSE", "blob": "e7dca554bcb802f98408383a864404e3aa4eacca", "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"}
+  ],
+  "derivation": "Each file is a byte-for-byte copy of the GitHub contents API blob at source_commit. No dependency-isolated adaptation is included."
+}

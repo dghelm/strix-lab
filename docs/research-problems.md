@@ -1,276 +1,202 @@
-# Profile-guided llama.cpp research problems
+# Reusable GPU primitive research portfolio
 
-This portfolio ranks five bounded questions for Strix Halo, with the smallest
-post-merge pilot first. These are research hypotheses, not measured gains or
-registered experiments. No GPU experiment, model download, or ROCm provisioning
-is part of this document's preparation.
+Updated 2026-09-05 after the Qwen3.5 baseline and six-trial profiling follow-up.
+The integration target is [halo-box/strix-llama.cpp](https://github.com/halo-box/strix-llama.cpp).
+The research unit is a reusable GPU operation with a frozen correctness and
+measurement contract. Models supply relevance and integration validation; a
+primitive benchmark need not wait for model downloads.
 
-## Evidence and executable boundary
+## Execution lanes and actual readiness
 
-Use [strix-llama](../configs/sources/strix-llama.yaml) at
-`ca94157f70a2776e8da6b6849b50b45a083d0478`, the installed ROCm 7.2.4 control
-[build profile](../configs/builds/hip-rocm-gfx1151.yaml), and
-[gfx1151 machine profile](../configs/machines/strix-halo-128g.yaml).
-Upstream paths below refer to that pinned source, whose HIP backend shares
-implementation under `ggml/src/ggml-cuda/`.
+| Lane | Purpose | Current boundary |
+|---|---|---|
+| ROCm 10 primitives | Compare and improve reusable providers, beginning with stable top-k on gfx1151. | Generic capsule runner, authenticated snapshots, comparison publication/CLI, and the TOPK host reference exist. Trusted native capsule/provider implementation remains a prerequisite. ROCm 10 is not installed in the expected prefix. No runnable top-k scenario is claimed. |
+| ROCm 7.2.4 integration | Establish whether an optimization helps the pinned model consumer. | Qwen3.5-4B Q4_K_M calibration, PP/TG profiling, and evidence export have executed. A finite-patch model campaign runner is available. |
 
-The v1 campaign accepts a finite reviewed patch list against one frozen source,
-build profile, machine, model, and native smoke suite. It does not search runtime
-arguments, CMake options, model choices, or capsule providers. Candidate patches
-must respect its source allowlist and protected evaluator/build/test files.
-An allowable patch is not automatically a scientifically adequate experiment.
+A ROCm 10 primitive result cannot be compared directly with a ROCm 7.2.4 model
+baseline. Integration needs a separately pinned ROCm 10 build and no-op
+calibration. The installed rocPRIM is 4.2.0 and lacks both top-k headers; pointing
+at the control SDK cannot enable the ROCm 10 providers. Preserve that control.
+Prepare the authentic isolated prefix and its verifier before admitting a
+bounded GPU conformance run. Successful provider correctness and graph replay
+then admit timed arms; they cannot be established by host-only tests.
 
-| Input | Actual coverage and readiness |
-|---|---|
-| [4B smoke suite](../configs/suites/smoke-qwen35.yaml) | Executable contract today, conditional on authorized hardware, build and verified local GGUF. Qwen3.5-4B Q4_K_M; separate `pp512`, `pp2048`, and empty-prompt `tg128` measurements. Two warmups per case, five windows of three measurements. Greedy gate: one prompt, seed 1234, 64 output tokens, context capacity 4096, 999 GPU layers. |
-| [2B model](../configs/models/qwen35-2b-smoke.yaml) | Registered Qwen3.5-2B Q4_K_M with artifact size/hash/revisions; execution remains unverified. Needs a separately frozen suite and local verification before use. |
-| [4B model](../configs/models/qwen35-4b-smoke.yaml) | Registered artifact, not proof of local availability. Q4_K_M does not mean every tensor is Q4_K; collect the actual tensor-type/shape inventory. Quantization calibration and tensor-policy provenance remain unknown. |
-| [Ornith 35B A3B](../configs/models/ornith15-35b-a3b.yaml), [Qwen3.8 27B](../configs/models/qwen38-27b.yaml), [Qwen3.8 Flash Next](../configs/models/qwen38-flash-next.yaml) | Draft entries without artifact pins or quantization recipes. No runnable model claims, substituted local weights, or invented hashes. |
+The [ROCm 10 top-k contract](rocm10-topk-gfx1151.md) remains authoritative for
+SDK/rocPRIM pins, public matrix, provider surface, correctness, timing, workspace,
+and comparison. This portfolio changes priority and work sequencing, not those
+contracts. Coordinator-managed bounded research can begin while capsule campaign
+automation remains deferred.
 
-The benchmark adapter currently emits only model, prompt count, generation
-count, repetitions and JSONL output arguments. The greedy server's 4096 context
-and GPU-layer settings do not establish benchmark settings. Capture resolved
-benchmark defaults and actual offload before attributing a result. `tg128` does
-not measure decoding after a 2048-token prefill; context capacity is not occupied
-context. There is no current long-context, concurrent-serving, vision, MTP, or
-multi-quantization performance claim.
+## What the completed studies establish
 
-Two existing records constrain the search:
+- [Baseline calibration and profiling](../field-reports/2026-09-05-qwen35-baseline-profile.md):
+  two same-build suites and separate PP/TG traces completed. The bundle exporter
+  false positive was fixed; all three preserved evidence bundles exported and
+  verified. Original failed records remain intact.
+- [Shape attribution and six-trial diagnostics](../field-reports/2026-09-05-qwen35-mmvq-shape-attribution.md):
+  repeated Q4_K fused FFN gate/up uses reconstructed K=2560, N=9216; the Q6_K
+  vocabulary projection uses K=2560, N=248320 and typically takes about 2.3 ms,
+  with occasional larger delays. These bindings come from source, GGUF metadata,
+  and dispatch order, not observed runtime tensor pointers/strides. The original
+  10.646 ms FFN-slot outlier did not recur. Large delays moved between kernels.
+  Six trials do not establish a causal profiler-mode effect or justify a patch.
+- [Profiler investigation](../field-reports/2026-09-05-rocprofv3-json-string-lifetime.md):
+  deferred HIP string formatting contains a source-level lifetime hazard.
+  CSV-only capture avoids that JSON branch; it does not fix the upstream cause.
+- Historical [RDNA4 MMVQ table](../experiments/smoke-qwen35/rdna35-mmvq-rdna4-nwarps/README.md)
+  regressed TG by 8.44%; [Q4_K two-warps](../experiments/smoke-qwen35/rdna35-mmvq-q4k-nwarps2/README.md)
+  was inconclusive in two replications. That blind warp sweep remains closed.
 
-- [RDNA4 MMVQ table](../experiments/smoke-qwen35/rdna35-mmvq-rdna4-nwarps/README.md):
-  correctness passed; `tg128` regressed 8.44% (95% interval -9.91% to -6.98%);
-  PP cases were inconclusive.
-- [Q4_K two-warps](../experiments/smoke-qwen35/rdna35-mmvq-q4k-nwarps2/README.md):
-  two same-machine replications were inconclusive, with TG point estimates
-  -0.69% and +0.43%. The record explicitly stops this branch before `nwarps=4`.
+The control [source](../configs/sources/strix-llama.yaml) stays pinned to
+`ca94157f70a2776e8da6b6849b50b45a083d0478`, with the
+[ROCm 7.2.4 build](../configs/builds/hip-rocm-gfx1151.yaml) and
+[gfx1151 machine](../configs/machines/strix-halo-128g.yaml).
+The [4B suite](../configs/suites/smoke-qwen35.yaml) measures separate PP512,
+PP2048, and empty-prompt TG128. It does not measure decode after a populated
+2048-token context. Benchmark defaults and server correctness settings are
+separate inputs. The pinned 2B model still needs its own verified execution;
+larger draft registry entries do not establish artifact availability or coverage.
 
-These are historical calibration/regression fixtures, not invitations to rerun
-or expand the warp sweep. They do not establish the bottleneck: correctness and
-aggregate timings cannot distinguish occupancy, bandwidth, launch costs, or
-dispatch effects.
+## Ranked problems
 
-## Ranked portfolio
+Priority combines reusable value, evidence, and contract readiness; it is not a
+speedup forecast. Provider ineligibility or a well-supported negative result is
+useful progress.
 
-Rank combines practical scope, cost and readiness, conditional on the required
-profile evidence. Confidence describes the hypothesis before new measurements;
-none has high confidence of a speedup. Patch questions lead because they fit v1.
+| Priority / ID | Question | First deliverable | Performance-arm admission |
+|---|---|---|---|
+| 1 / `stable-topk` | Can pinned ROCm 10 selection providers satisfy deterministic membership/order efficiently across small and long rows? | Host reference/input contract, source/API conformance, then trusted provider implementations. | Authentic isolated toolchain, complete capsule, correctness including graph replay, and no-op calibration. |
+| 2 / `quantized-matvec` | Which costs in repeatedly used Q4_K/Q6_K shapes can be removed without changing the operation contract? | Model-free fixture using source/GGUF-derived type/layout metadata pending runtime verification, independent reference checks, explicit timing boundary. | Fixture correctness, reproducible baseline, and mechanism-backed candidate. |
+| 3 / `quantized-prefill` | Are recurring PP shapes better served by existing valid kernels or tiles? | Attribute existing PP traces to shape/type/dispatch families; choose at most three alternatives. | Quantized reference and neighboring boundary/tail cases frozen before evaluation. |
+| 4 / `reduction-and-fusion` | Do repeated reduction/normalization or state-update boundaries permit useful reuse or fusion? | Map a real consumer to its existing implementation and identify intermediate traffic or launch work. | Consumer evidence, reference semantics, layout/aliasing and numerical policy, useful measured opportunity. |
+| 5 / `graph-execution` | Is there avoidable recurring setup/submission around these primitives? | Separate stable replay from intermittent delays and identify one demonstrated redundancy. | Replay/invalidation correctness and trace-supported mechanism. |
 
-| Rank / ID | Question | Kind | Conditional payoff / confidence | Start status |
-|---|---|---|---|---|
-| 1 / `decode-graph-reuse` | Can repeated graph setup or launch gaps be removed without stale bindings? | Patch | Modest broad benefit if submission dominates; medium-low confidence | Smoke baseline/profile ready; patch needs trace evidence |
-| 2 / `quant-shape-dispatch` | Are specific PP matrix shapes sent to an inefficient existing kernel? | Patch | Potentially useful PP benefit; medium-low confidence | Smoke baseline/profile ready; quant correctness expansion required |
-| 3 / `runtime-batching` | Which batch and CPU submission settings avoid wasted host work? | Configuration | Low implementation cost, potentially useful operational benefit; low confidence of gain | Outside v1 candidate surface |
-| 4 / `hybrid-state-traffic` | Does hybrid attention/state movement dominate sustained-context inference? | Patch | Potentially substantial at long context; low confidence | Missing workload and state-correctness contract |
-| 5 / `routing-selection` | Is selection a material end-to-end bottleneck for a real routing workload? | Patch; later provider research | Unknown payoff; very low confidence | Model/workload/attribution blocked; ROCm 10 lane separately blocked |
+### Stable top-k: first ROCm 10 loop
 
-### 1. Decode graph reuse
+Start with the existing public matrix and symbolic providers `baseline-hip`,
+`rocprim-topk`, and `rocprim-segmented-topk`. IDs do not establish upstream API
+names or ordering guarantees. The exact pinned source must pass compile and
+behavioral conformance before either rocPRIM provider is enabled.
 
-**Hypothesis and locus.** In `ggml/src/ggml-cuda/ggml-cuda.cu` and `common.cuh`,
-graph invalidation, rebuilding, or synchronization might recur unnecessarily
-when decode shapes remain stable. The pin already defaults `GGML_HIP_GRAPHS`
-to ON; "enable graphs" is not a novel patch. Verify the built feature and actual
-replay behavior first. Shared code recognizes `GGML_CUDA_DISABLE_GRAPHS`, but
-changing that environment is a diagnostic configuration experiment, not a v1
-patch candidate.
+Membership at the K boundary is part of correctness: sorting an arbitrary set
+of selected items does not repair unstable tie membership. GPU-side tie
+resolution and ordering stay inside timing; CPU fallback/canonicalization cannot
+rescue a provider. Preserve signed-zero bits, infinities, NaN rejection,
+eager/replay equality, deterministic inputs, and the workspace cap.
 
-**Evidence needed.** Separately trace host HIP calls and device execution for
-`tg128` and both PP cases. Count captures, instantiations, updates, launches,
-synchronizations and allocations; map gaps to host stacks and graph invalidation
-reasons. Distinguish first-use setup from steady replay. A short GPU kernel or
-smoke speedup alone cannot establish launch overhead causally.
+Compare the three trusted provider selections under the same complete matrix.
+Only after those results, propose at most two one-provider implementation patches
+if there is a concrete mechanism. No per-shape dispatch or matrix expansion in
+v1. A provider that fails conformance stays unavailable. If the baseline wins,
+record that result and explain the cost before proposing another candidate.
 
-**Bounded search.** At most two reviewed patches, each removing one demonstrated
-redundant update or allowing reuse under one explicit shape/layout/address
-invariant. Preserve fallback on invariant changes. Do not change graph mode,
-math, batching, or global synchronization policy in the same candidate.
+Standalone selection research does not require an MoE model. A primitive gain
+remains a primitive result until consumer shapes, ordering requirements, and
+end-to-end behavior are independently established.
 
-**Correctness and stop.** Require cross-arm tokens plus graph replay tests with
-changed input contents, buffers, sequence lengths and reset state; exercise
-capture invalidation rather than only steady shapes. Stop if the trace already
-shows stable replay without material host gaps, if safe invalidation cannot be
-specified, or after two candidates fail fresh confirmation. Smoke can measure
-PP/TG impact now; broader graph correctness must be established before acceptance.
+### Quantized matvec and prefill
 
-### 2. Quantized PP shape dispatch, without another warp sweep
+Use synthetic public inputs with model-derived type/layout metadata, not model
+weights copied into fixtures. Preserve block formats and strides and exercise
+tails and neighboring shapes. Q4_K_M is a model quantization label, not a tensor
+type. Test Q4_K and Q6_K separately.
 
-**Hypothesis and locus.** Inspect `ggml/src/ggml-cuda/ggml-cuda.cu`, `mmq.cu`,
-`mmq.cuh`, and `mmq-config-rdna3-5.cuh`: a measured Q4_K_M tensor shape may use
-an inefficient MMQ tile or dispatch boundary. Prior MMVQ decode failures do not
-answer this PP question. Keep `mmvq.cu`/`mmvq.cuh` launch tables unchanged.
+A large recurring vocabulary projection is worth investigating, but its duration
+does not prove inefficiency or a bandwidth bottleneck. Require a proposed
+mechanism. Numerical changes need an independently frozen primitive contract;
+passing its tolerance does not waive the model campaign's exact cross-arm token
+gate. Quality-tradeoff research requires a separate evaluator.
 
-**Evidence needed.** Attribute `pp512` and `pp2048` time to actual matrix shapes,
-tensor types, selected MMQ versus library paths, padding/tail work, launches,
-memory traffic and available occupancy counters. Measure kernel fractions and
-repeatability before choosing a threshold. Do not assume a bandwidth bottleneck
-from the GPU model or the artifact's quantization label.
+Keep MMVQ warp tables unchanged while investigating PP. Each PP candidate uses
+one existing valid dispatch/tile alternative for one observed family on gfx1151,
+retaining other types/devices. Stop after three candidates or earlier if
+attribution is diffuse or the possible gain is too small.
 
-**Bounded search.** At most three patches using existing valid dispatch/tile
-choices for one observed shape family on gfx1151. One boundary or tile choice
-per candidate; retain other devices/types and MMVQ behavior. Do not combine
-vec-dot rewrites, new quantization, or blanket library-force options.
+### Reduction, state, and graph follow-ons
 
-**Correctness and stop.** Add independently reviewed CPU-reference matmul cases
-for the observed quant types, boundary/tail shapes, and neighboring dispatch
-shapes before candidate evaluation; freeze tolerances before results. Test all
-affected paths, not just the fastest tensor. Protect `tg128` and both PP cases.
-Stop if attribution is diffuse, an existing alternative is already selected,
-or the three-candidate budget produces no reproducible end-to-end benefit.
+Review [target PRs](https://github.com/halo-box/strix-llama.cpp/pulls) and their
+actual source before proposing existing optimizations again. Distinguish merged
+from open, HIP from Vulkan, and author benchmark claims from local reproduction.
+These cards remain discovery questions until a real consumer and cost are known.
 
-### 3. Runtime batching and CPU submission tuning
+HIP graph support is already enabled by default in the pin. A patch must remove
+demonstrated work while preserving invalidation on buffer, layout, sequence,
+and state changes. Stop if replay is stable without material avoidable gaps.
+Moving stalls are a measurement question, not a reason to rewrite whichever
+kernel has the largest isolated interval.
 
-**Hypothesis.** Logical batch, physical microbatch and CPU thread counts may
-trade host overhead against GPU utilization on shared-memory Strix Halo. This
-has the lowest implementation cost once typed configuration support exists;
-it does not have the highest demonstrated speedup probability.
+State/attention work needs chunked versus unchunked prefill, reset, sequence
+isolation, and continuation checks. Add a versioned prefill-plus-decode workload
+before sustained-context claims. Check existing snapshot fusion first.
 
-**Workload/evidence.** Start with 4B Q4_K_M PP512/PP2048 and TG128, recording
-host scheduling, GPU idle gaps, page faults, memory use, offload and resolved
-defaults. Later add 2B under its own suite. Keep context, cache type, graph mode,
-offload and model fixed. Verify available options against the pinned binaries.
+## Operating the loops
 
-**Bounded search.** Propose batch values 256/512, microbatch values 128/256
-(not exceeding batch), and CPU threads 4/8: eight settings maximum, screened
-one axis at a time. These are proposed values, not supported StrixLab flags.
-The current adapter has no authenticated tuning surface. Add typed argv and
-comparison semantics first; separate frozen scenarios are not automatically
-eligible for direct comparison. Never emulate this search by patching defaults
-inside a fixed-scenario campaign.
+Each loop has an owner and a finite next batch. Agents investigate independently;
+the coordinator serializes GPU work and owns admission, review, and baseline
+promotion. The aim is accepted evidence, including negative results.
 
-**Correctness and stop.** Require cross-arm tokens and matched effective
-settings between correctness and timing paths. No quantized-cache accuracy
-tradeoff is included. Stop after the bounded grid if effects remain below noise
-or PP benefit trades away TG. No clocks, power, driver or system tuning.
+Each research card records:
 
-### 4. Hybrid recurrent-state and attention traffic
+1. **Operation and consumer:** shapes, types, layouts, semantics, and whether
+   relevance is observed, source-derived, or hypothetical.
+2. **Objective and protected cases:** a fixed metric/policy, minimum useful effect
+   chosen before results, and correctness independent of candidates.
+3. **Baseline and allowed surface:** exact source/toolchain/build identities and
+   one mechanism per patch; inputs, evaluator, and timing code are protected.
+4. **Discriminating test:** what result supports or rejects the hypothesis,
+   including conformance prerequisites.
+5. **Budget and stop:** maximum candidates/runs and closure for ineligibility,
+   small opportunity, repeated inconclusive results, or correctness failure.
+6. **Result and next decision:** patch, evidence, identities, verdict, and
+   explanation; a new iteration needs an evidence-backed question.
 
-**Hypothesis and locus.** The 2B/4B registry describes gated DeltaNet plus full
-attention. Inspect `ggml/src/ggml-cuda/gated_delta_net.cu`, its dispatch in
-`ggml-cuda.cu`, and `fattn.cu`. The pin already contains fused recurrent-state
-snapshot copies: establish whether that path is active before proposing fusion.
+Cycle: inspect evidence, propose a mechanism, review candidate and evaluator,
+calibrate, screen a finite batch, confirm with fresh evidence, then promote or
+close. Interrupted work remains spent and visible. Changing the baseline,
+toolchain, workload, matrix, or acceptance policy starts a new identified
+experiment rather than repairing an unfavorable result.
 
-**Missing workload.** Propose separately versioned occupied contexts 2048 and
-8192, each followed by 128 generated tokens, batch one; retain the short smoke
-cases as regressions. Verify model/runtime context support and memory bounds
-before adopting 8192. First use pinned 4B Q4_K_M, then separately pinned 2B.
-The current single-metric benchmark adapter cannot express combined prefill and
-generation; increasing its PP count alone does not fill this gap.
+The two evaluation paths remain distinct:
 
-**Evidence/search.** Attribute time and bytes to full attention, recurrent
-updates, state snapshots and copies as context grows. Select only the dominant
-path. At most two patches: one narrowly guarded copy elimination or one existing
-tile/layout choice, never both mechanisms together. Preserve cache precision.
+- **Model campaign:** finite source patches, two calibration suites, four AB/BA
+  screening suites per candidate, four fresh confirmation suites per survivor.
+  Three candidates cost at most 26 suites, excluding separate diagnostics.
+  Frozen objectives/protected cases and cross-arm token parity apply. Keep the
+  pilot's zero protected-regression margin. `objective_met_provisional` does not
+  change the raw judge verdict or establish campaign-wide confidence.
+- **Primitive capsule:** the trusted scenario owns provider semantics, timing,
+  correctness, and comparison policy. Until capsule campaign automation exists,
+  the coordinator schedules explicit bounded arms and records order/budget.
+  Do not pass provider selections through the model campaign or claim it already
+  automates capsules. Apply the top-k scenario's existing comparison policy
+  unchanged, rather than substituting the model campaign's margin.
 
-**Correctness and stop.** Require recurrent-state/reference checks, chunked
-versus unchunked prefill, reset/sequence isolation, continuation tokens and
-long-context cross-arm parity. Freeze fixtures outside candidate patches. Stop
-if the existing fusion already removes the traffic, if another path dominates,
-or if correctness requires relaxing numerical/semantic rules after seeing a gain.
+Keep clean timing separate from profiled diagnostics. Overlapping trace durations
+are not additive savings. Under an unchanged-rest assumption, component fraction
+`f` and speedup `s` bound total speedup by `1 / (1 - f + f/s)`; use a measured
+critical-path fraction when work overlaps. No numerical gain forecast is justified.
 
-### 5. Routing selection, with a top-k relevance gate
+## Kickoff, 2026-09-05
 
-**Hypothesis.** A future verified model may spend material time in routing
-selection, including ordering and synchronization. The current dense 2B/4B
-smoke inputs are not a proxy for MoE routing or sparse attention. Draft model
-names establish neither architecture support nor measured routing shapes.
+Three Codex workers have separate worktrees and bounded ownership. The first
+iteration's [upstream research cards](primitive-opportunities.md),
+[native host reference](../native/topk/README.md), and capsule-comparison
+publication path have been reviewed and integrated locally. The following table
+records their initial assignments; follow-on work is admitted separately:
 
-**Prerequisites/evidence.** Obtain reviewed provenance and quantization pins,
-local verification, a supported source/build and a versioned workload first.
-Trace routing/selection call counts, rows, columns, K, ordering semantics,
-surrounding work and total token latency. Establish whether time is actually
-in selection rather than expert matmul or data movement. A source bump, if
-needed, is a new baseline, not a candidate exception.
+| Worker | First iteration | Completion evidence |
+|---|---|---|
+| `strix-topk` | Host-only TOPK reference and deterministic input foundation; implementation plan approved. | Independent fixed vectors and semantic tests, reviewed commit; no provider/GPU availability claim. |
+| `strix-capsule` | Authenticated comparison publication and CLI around the pure comparator; implementation plan approved. | Host-only success/failure/authentication tests; unchanged statistics and model behavior. |
+| `strix-primitives` | Upstream primitive mapping and read-only ROCm 10 readiness investigation. | Linked consumer evidence, ranked next cards, isolated toolchain preparation recommendation. |
 
-**Bounded search.** Only after attribution, evaluate at most two narrow
-existing-HIP selection patches under the model scenario. Separately,
-[planned ROCm 10 top-k](rocm10-topk-gfx1151.md) defines a public microbenchmark
-matrix (rows 1–128, columns 128–262144, K 1–256), not measured model shapes.
-Its trusted capsule, payload/provider semantics, conformance, and ROCm 10
-authenticity/isolation gates remain prerequisites. That scenario does not need
-model weights, but cannot establish model relevance by itself. Do not provision
-ROCm 10 for this portfolio or treat its providers as v1 campaign candidates.
+The coordinator reviews each result and admits the next bounded iteration.
+These first iterations establish the executable boundary; they are not measured
+provider experiments. The trusted capsule and authentic toolchain admit bounded
+GPU conformance work. After correctness and graph checks pass, timed provider
+arms and no-op calibration can begin. Preparation need not wait for new models.
 
-**Correctness and stop.** Respect each operation's actual semantic contract.
-For the planned capsule this includes exact stable value/index membership,
-boundary ties, signed zeros, infinities, NaN rejection and eager/replay equality;
-keep GPU ordering overhead inside timing. Model acceptance additionally needs
-cross-arm routing/token checks and end-to-end improvement. Stop before kernel
-research if measured selection fraction cannot support a useful total gain.
-
-## Common evidence, estimates and acceptance
-
-No numerical gain forecast is justified yet. Use measured unprofiled time
-fraction `f` to bound a proposed optimization: if its component speedup is
-hypothesized to be `s`, total speedup is at most `1 / (1 - f + f/s)` under the
-unchanged-rest assumption. For illustration only, `f=0.10`, `s=2` yields about
-5.3% throughput improvement; this is not an observed Strix Halo result. For
-overlapping host/device work, derive a critical-path fraction rather than summing
-overlapping profiler durations. Set a minimum useful effect before candidates;
-stop if even eliminating the component cannot reach it.
-
-Keep diagnostic profiled runs separate from clean timing evidence. Record tool
-identity, source/build/model digests, workload settings, trace commands and
-redacted summaries. Missing profiler/counter support blocks causal attribution;
-do not substitute invented counters. Preserve failed and inconclusive runs.
-
-The smoke backend gate covers selected **f32** MUL_MAT, MUL_MAT_ID, TOP_K,
-ARGSORT and RMS_NORM cases. It does not cover quantized kernel math or recurrent
-state. Greedy repeatability within one arm is also insufficient: correctness-
-preserving acceptance requires authenticated baseline/candidate token parity.
-The v1 exact-token gate targets launch/layout-preserving candidates; operator
-reference tolerances never waive campaign cross-arm token identity. A candidate
-that changes numerical behavior and needs quality-tolerance acceptance requires
-a separately reviewed, frozen evaluator outside this v1 campaign.
-Broader operator fixtures and token prompts must be reviewed and frozen before
-the campaign, never modified by candidate patches. A changed suite gets a new
-scenario identity. If the merged runner does not enforce a required check,
-record that acceptance blocker explicitly.
-
-Require fresh confirmation after screening, under serial exclusive GPU use and
-matched source/model/machine/toolchain/settings, with both execution orders.
-The native judge requires improvement in **all** cases for overall improvement.
-A target gain with inconclusive protected cases remains `mixed` in the raw judge.
-The campaign may separately declare `objective_met_provisional` using its frozen
-plan: `objective_cases` is a nonempty unique subset of performance case IDs
-(default: all); every objective must have an existing `improvement` verdict.
-Every remaining case is automatically protected and must satisfy
-`percent_ci_low >= -protected_regression_margin_percent`. The explicit margin
-is at least zero and less than 100 percent, default zero. For this initial pilot,
-keep the zero default; a nonzero tolerance needs a practical justification
-before screening. Both screening comparisons and both fresh confirmations must
-pass, with cross-arm parity throughout. Preserve the raw overall verdict even
-when it is mixed. The campaign label is neither judge improvement nor best-known.
-Per-case intervals are not simultaneous or campaign-level confidence, and this
-rule is not a formal noninferiority proof.
-
-Do not pool PP/TG, change objectives after screening, or relax margins to rescue
-a candidate. Correctness failure, a failed protected-case bound, exhausted budget
-or absent mechanism evidence stops acceptance. Maintainership alone assigns `best-known`;
-same-machine confirmation is not independent community replication.
-
-## Smallest pilot after merge
-
-1. **Calibrate.** On later explicitly authorized hardware, verify inputs and run
-   two distinct same-build smoke suites and one comparison, matching the built-in
-   calibration cost. Inspect the no-op verdict/noise and run/bundle integrity.
-   Additional order diagnostics require a separately budgeted calibration step.
-   Use existing MMVQ summaries as negative interpretation fixtures without scheduling their patches again. Stop for unstable conditions
-   or correctness/evidence failure.
-2. **Profile one baseline.** Collect separate PP and TG traces with resolved
-   settings. Choose problem 1 or 2 only if attribution and the payoff bound
-   justify it. No evidence means no candidate campaign.
-3. **Freeze gates and candidates.** Add any missing correctness coverage through
-   ordinary reviewed harness/scenario work, then freeze it. Review a finite list
-   of at most two graph patches or three dispatch patches, each against the same
-   original source base; do not accumulate unconfirmed patches. Keep tests and
-   evaluators outside the candidate patch surface.
-4. **Screen and confirm.** Use the merged campaign's bounded screening and fresh
-   confirmation stages, including AB/BA order checks. Confirm against the
-   original baseline with new evidence; preserve unsuccessful attempts and stop
-   when the finite list is exhausted. Preserve mixed judge verdicts; report a
-   separately satisfied frozen campaign objective only as provisional.
-
-Thus one pinned model, one existing smoke workload, and one selected patch
-mechanism form the initial portfolio. Problems 3–5 remain useful design work
-with explicit input gaps; none is a reason to download models or activate ROCm
-10 now. Follow the [community workflow](community-workflow.md) when converting
-these questions into versioned scenarios and experiment records.
+Use the [community workflow](community-workflow.md) for scenarios, experiments,
+and replication. Primitive improvements and model integration results stay
+separately attributable. Neither an agent's proposed winner nor same-machine
+confirmation automatically becomes `best-known`.

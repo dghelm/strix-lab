@@ -1,0 +1,17 @@
+{
+  "commit": "55f93686c01528224f448c19128836e7df245f72",
+  "files": [
+    {
+      "path": "json.hpp",
+      "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63",
+      "source_url": "https://github.com/nlohmann/json/blob/55f93686c01528224f448c19128836e7df245f72/single_include/nlohmann/json.hpp"
+    },
+    {
+      "path": "LICENSE.MIT",
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603",
+      "source_url": "https://github.com/nlohmann/json/blob/55f93686c01528224f448c19128836e7df245f72/LICENSE.MIT"
+    }
+  ],
+  "release_tag": "v3.12.0",
+  "repository": "https://github.com/nlohmann/json"
+}

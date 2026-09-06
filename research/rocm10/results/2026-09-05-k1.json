@@ -1,0 +1,1845 @@
+{
+  "schema_version": 1,
+  "artifact": "rocm10-private-research-k1-comparison",
+  "date": "2026-09-05",
+  "date_timezone": "America/Chicago",
+  "evidence_directory_id": "rocm10-20260906T012829Z",
+  "scope": "Private research comparison of baseline adapter versus research K=1 candidate; not a fixed-v1 capsule benchmark or provider qualification.",
+  "metadata_coverage": "unknown",
+  "vendor_authenticity": "unverified",
+  "providers": {
+    "baseline": {
+      "entry_point": "strixlab_baseline_topk_hip",
+      "source": "native/topk/baseline/adapter/hip_bitonic_topk.cu",
+      "description": "Existing HIP bitonic TOPK adapter with scratch and D2D index copy, invoked at K=1."
+    },
+    "candidate": {
+      "entry_point": "strixlab_topk_k1_hip",
+      "source": "research/rocm10/topk_k1.hpp",
+      "description": "Research argmax: one 256-thread block per row, 2 KiB static shared memory, no caller scratch."
+    }
+  },
+  "build": {
+    "evidence": {
+      "phase": "compile-k1-01",
+      "phase_sha256": "ff23ca60cce5892e986d392e028ecdb5a3070983bd9c35e695e77d4d1a83abfa",
+      "status": "process-complete",
+      "process": {
+        "elapsed_seconds": 4.8000922980718315,
+        "failure": null,
+        "log_bytes": 276281,
+        "returncode": 0
+      },
+      "diagnostic": true,
+      "prefix_before": {
+        "bytes": 87465955,
+        "evidence_bytes_charged": 177169192,
+        "member_count": 27627,
+        "path": "prefix-before.json",
+        "physical_equal": true,
+        "resolved_links": 305,
+        "semantic_equal": true,
+        "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+      },
+      "prefix_after": {
+        "bytes": 87465955,
+        "evidence_bytes_charged": 177169192,
+        "member_count": 27627,
+        "path": "prefix-after.json",
+        "physical_equal": true,
+        "resolved_links": 305,
+        "semantic_equal": true,
+        "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+      },
+      "launcher_sha256": "f77f0cf365c06593279133cc5f3967e0eb5803995c887933653b5b00320fac97",
+      "inputs": {
+        "preflight_exec.py": {
+          "bytes": 8327,
+          "path": "preflight_exec.py",
+          "sha256": "d1eb709e679963300fb250c0c292b5740738cce99d5cb925b7560aea4f5bcf3b"
+        },
+        "topk_k1.hpp": {
+          "bytes": 3596,
+          "path": "topk_k1.hpp",
+          "sha256": "0830f41bc684c26a1aaf494cacec5fc4da2c0b56dd05b16a3e8ecb51c6f57753"
+        },
+        "topk_k1_compare.cpp": {
+          "bytes": 12206,
+          "path": "topk_k1_compare.cpp",
+          "sha256": "9928430704e4aecca3078ccecb859957f91176efe568dead360908aa4cd61c15"
+        }
+      },
+      "outputs": [
+        {
+          "bytes": 8327,
+          "path": "input/preflight_exec.py",
+          "sha256": "d1eb709e679963300fb250c0c292b5740738cce99d5cb925b7560aea4f5bcf3b"
+        },
+        {
+          "bytes": 3596,
+          "path": "input/topk_k1.hpp",
+          "sha256": "0830f41bc684c26a1aaf494cacec5fc4da2c0b56dd05b16a3e8ecb51c6f57753"
+        },
+        {
+          "bytes": 12206,
+          "path": "input/topk_k1_compare.cpp",
+          "sha256": "9928430704e4aecca3078ccecb859957f91176efe568dead360908aa4cd61c15"
+        },
+        {
+          "bytes": 87465955,
+          "path": "prefix-after.json",
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        {
+          "bytes": 87465955,
+          "path": "prefix-before.json",
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        {
+          "bytes": 274369,
+          "path": "stderr.log",
+          "sha256": "7531379f2d40e1f9b275ae021fc11eeb981735ac3f21e8ac62c9cb036ff86250"
+        },
+        {
+          "bytes": 1912,
+          "path": "stdout.log",
+          "sha256": "8d9c4bcc28640da315e851c028695795c31ce470d225768f1f250e1ad649f2a2"
+        },
+        {
+          "bytes": 191688,
+          "path": "work/topk-k1-compare",
+          "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+        }
+      ],
+      "lock_release": null,
+      "lock_release_note": "Compile phase has no GPU lease or lock-release receipt."
+    },
+    "compiler_argv": [
+      "/sdk/lib/llvm/bin/clang++",
+      "-x",
+      "hip",
+      "--rocm-path=/sdk",
+      "--hip-path=/sdk",
+      "--offload-arch=gfx1151",
+      "-std=c++17",
+      "-O3",
+      "-I/native",
+      "/input/topk_k1_compare.cpp",
+      "/native/reference.cpp",
+      "/native/baseline/adapter/hip_bitonic_topk.cu",
+      "-lcrypto",
+      "-o",
+      "/work/topk-k1-compare"
+    ],
+    "executable": {
+      "bytes": 191688,
+      "path": "work/topk-k1-compare",
+      "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+    },
+    "source_inputs": {
+      "preflight_exec.py": {
+        "bytes": 8327,
+        "path": "preflight_exec.py",
+        "sha256": "d1eb709e679963300fb250c0c292b5740738cce99d5cb925b7560aea4f5bcf3b"
+      },
+      "topk_k1.hpp": {
+        "bytes": 3596,
+        "path": "topk_k1.hpp",
+        "sha256": "0830f41bc684c26a1aaf494cacec5fc4da2c0b56dd05b16a3e8ecb51c6f57753"
+      },
+      "topk_k1_compare.cpp": {
+        "bytes": 12206,
+        "path": "topk_k1_compare.cpp",
+        "sha256": "9928430704e4aecca3078ccecb859957f91176efe568dead360908aa4cd61c15"
+      }
+    },
+    "native_files": [
+      {
+        "bytes": 2310,
+        "path": "CMakeLists.txt",
+        "sha256": "05575d546dacd7cff12af95d6fcdd630719af6171968c9d791d9ba1bd0f23fbd"
+      },
+      {
+        "bytes": 8543,
+        "path": "README.md",
+        "sha256": "b344304e29a1228c8b08e5d1fe37e51657bc269cbee7cedcef5398ace19e00f7"
+      },
+      {
+        "bytes": 1757,
+        "path": "baseline/README.md",
+        "sha256": "40c7606d4651432b8e98a402ec89b270fb895cb680556bba94c9e90a9a92176b"
+      },
+      {
+        "bytes": 1650,
+        "path": "baseline/adapter/PROVENANCE.md",
+        "sha256": "9baa652317227601e6d22817b893372fb8e06acd4cbb2819baea598f2ce12e4e"
+      },
+      {
+        "bytes": 1033,
+        "path": "baseline/adapter/compile-receipt.md",
+        "sha256": "fafee4e15b297e07ebd9da47d9450bf22f012622e76392bd20d0882742930b60"
+      },
+      {
+        "bytes": 4146,
+        "path": "baseline/adapter/hip_bitonic_topk.cu",
+        "sha256": "f8eaf6c57ac0e558323518ccf39ce951e610f34203fd3861997162e510e57672"
+      },
+      {
+        "bytes": 1127,
+        "path": "baseline/adapter/hip_bitonic_topk.hpp",
+        "sha256": "c1b8d9b4cf69dff5056eb5f2233ab01821766bb4972ecafe2814e2131b63e319"
+      },
+      {
+        "bytes": 1546,
+        "path": "baseline/provenance.json",
+        "sha256": "65f13076322e73756b73bd30a7071709327b0416cfb6a33055a9dc616fdcc883"
+      },
+      {
+        "bytes": 1078,
+        "path": "baseline/upstream/LICENSE",
+        "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+      },
+      {
+        "bytes": 13110,
+        "path": "baseline/upstream/argsort.cu",
+        "sha256": "ef88c979b7dda6a15a789df11dfc0f15566c725d653229851c95df3bf23b92b2"
+      },
+      {
+        "bytes": 950,
+        "path": "baseline/upstream/argsort.cuh",
+        "sha256": "fece4f9312dc2757ab85472366e026ca035344afba412daca2f97fbf89df477a"
+      },
+      {
+        "bytes": 63110,
+        "path": "baseline/upstream/common.cuh",
+        "sha256": "af2bf79c832015090f186ae8aca2a7af4343cc9d9b9d52ed09060a6728692b87"
+      },
+      {
+        "bytes": 4533,
+        "path": "baseline/upstream/top-k.cu",
+        "sha256": "88db287bcb1c4949b101bf53fcfd0d68d6af065c3d22404ef3a2f2de023adda4"
+      },
+      {
+        "bytes": 100,
+        "path": "baseline/upstream/top-k.cuh",
+        "sha256": "3dc6221a33577372fe7f907aeeb395fb20ed0a6e6543efd8f03cd9dce7b82b08"
+      },
+      {
+        "bytes": 274,
+        "path": "capsule_main.cpp",
+        "sha256": "13a353174afaadbaf10029552ad7f994c4376b86c974b25c7bdfaa7fe4cdf3e3"
+      },
+      {
+        "bytes": 10538,
+        "path": "capsule_transport.cpp",
+        "sha256": "25e5971506753955972092e5de314879591b736122082d8f3964eeb3ce080898"
+      },
+      {
+        "bytes": 138,
+        "path": "capsule_transport.hpp",
+        "sha256": "29ad05a7a085d964686ef5abaa2625b71608d186eaa45580cc58b0973f37fc7e"
+      },
+      {
+        "bytes": 2389,
+        "path": "host_fixture.cpp",
+        "sha256": "cf041aaefc8ad2b1f4a0b08f8b9546d67146335251c070402ea2c63a53e04157"
+      },
+      {
+        "bytes": 691,
+        "path": "host_fixture.hpp",
+        "sha256": "a72905add44c14ec8acf1869f7e69ef468d8fbd11093291e493c2aa285f5cae0"
+      },
+      {
+        "bytes": 7789,
+        "path": "reference.cpp",
+        "sha256": "65ecb31854c98b52b9cbab5174a280c527bd6c83bc45114ab3c7cdcee4d7f762"
+      },
+      {
+        "bytes": 1310,
+        "path": "reference.hpp",
+        "sha256": "c16593de56f10efb91f9ed9bf11da65786d6e5004072fdf2a30d1d48e424cc23"
+      },
+      {
+        "bytes": 1076,
+        "path": "third_party/nlohmann/LICENSE.MIT",
+        "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603"
+      },
+      {
+        "bytes": 953436,
+        "path": "third_party/nlohmann/json.hpp",
+        "sha256": "aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63"
+      },
+      {
+        "bytes": 652,
+        "path": "third_party/nlohmann/provenance.json",
+        "sha256": "9954c8da38c2b429ad813bb51820d92f8f1ad54d4655c284c7b0f0b731c986ea"
+      }
+    ],
+    "archive_observed_sha256": "4feabd9f2da72352df37f6d714a54847d3fe913c0341fbe2a6542c1164024baf",
+    "quarantine_result_sha256": "08f153a04c921e4d8a9429e3e92b58a43c7134e710259d6e66eb01c37c927eb4"
+  },
+  "analysis": {
+    "trials_pooled": false,
+    "raw_samples_preserved": true,
+    "sample_units": "microseconds per launch; each sample is a batch of 100 launches",
+    "median_definition": "Arithmetic mean of sorted samples at zero-based positions 9 and 10, separately for each provider, shape and trial.",
+    "ratio_definition": "baseline_median_us / candidate_median_us; ratio greater than 1 means lower candidate median time. This is a ratio of medians, not a median of paired ratios.",
+    "verification": [
+      "All compile and run receipt output byte counts and SHA-256 hashes verified against evidence files.",
+      "All three phases process-complete with return code 0 and no process failure.",
+      "Prefix before/after evidence hashes match, with physical_equal and semantic_equal true in all three phases.",
+      "Both measured runs diagnostic=false, empty stderr, preflight passed, exclusive GPU lease acquired and matching released receipt.",
+      "Both runs used the same compiled executable; shape, seed and input digest match across trials.",
+      "All 480 raw samples are finite and positive; all 24 provider medians recomputed exactly.",
+      "Both providers passed CPU correctness checks before and after timing for all six shapes in both trials."
+    ],
+    "limitations": [
+      "Only six K=1 shapes and one deterministic distinct finite F32 input per shape on one gfx1151 device; no ties, NaNs or general-K qualification.",
+      "Two separate trials, without pooling, confidence intervals or broad workload claims.",
+      "Timing includes all provider stream work, baseline D2D index copy and possible host enqueue gaps; it is not pure kernel latency.",
+      "No rocPRIM or control comparison was measured.",
+      "Compile used loader diagnostics; both timing runs disabled diagnostics.",
+      "Preflight source hashes differ between trial1 and trial2; both receipt hashes are retained. The measured executable and launcher hashes match across trials.",
+      "Loaded library paths are observations; metadata coverage remains unknown and vendor authenticity unverified.",
+      "Receipt hashes identify external evidence; the large prefix evidence files and executable are not embedded in this portable artifact."
+    ]
+  },
+  "trials": [
+    {
+      "trial": "trial1",
+      "evidence": {
+        "phase": "run-k1-01",
+        "phase_sha256": "9fd20f02e3c6b855bfe061e525c5107a146fc6cb4ab52e841a203262c9782740",
+        "status": "process-complete",
+        "process": {
+          "elapsed_seconds": 0.6609766168985516,
+          "failure": null,
+          "log_bytes": 11478,
+          "returncode": 0
+        },
+        "diagnostic": false,
+        "prefix_before": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-before.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "prefix_after": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-after.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "launcher_sha256": "658c4253d96c147cc4e7681e4a8ba0a32140034cb60e494ab2fc8bb5e53b9c3b",
+        "inputs": {
+          "preflight_exec.py": {
+            "bytes": 8775,
+            "path": "preflight_exec.py",
+            "sha256": "defce65e1d77d88652bb6b93d0ff363ee6175e2d9965092a291ccf72b08ce46e"
+          },
+          "topk-k1-compare": {
+            "bytes": 191688,
+            "path": "topk-k1-compare",
+            "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+          }
+        },
+        "outputs": [
+          {
+            "bytes": 8775,
+            "path": "input/preflight_exec.py",
+            "sha256": "defce65e1d77d88652bb6b93d0ff363ee6175e2d9965092a291ccf72b08ce46e"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-after.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-before.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 0,
+            "path": "stderr.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 11478,
+            "path": "stdout.log",
+            "sha256": "c6a5727347e1afeceeb5b6f58d856ef1d4743c6248cb297eac322b6c53436f76"
+          },
+          {
+            "bytes": 191688,
+            "path": "work/topk-k1-compare",
+            "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+          }
+        ],
+        "lock_release": {
+          "sha256": "e0fae4a60abe46fdbfde39399faed027c1922915b264a7a47febd97e09a11a91",
+          "released": true,
+          "phase_sha256": "9fd20f02e3c6b855bfe061e525c5107a146fc6cb4ab52e841a203262c9782740",
+          "method": "exclusive_lock context exited"
+        }
+      },
+      "preflight": {
+        "event": "preflight_pass",
+        "gid": 1000,
+        "gpu_devices": {
+          "/dev/dri/renderD128": [
+            226,
+            128
+          ],
+          "/dev/kfd": [
+            237,
+            0
+          ]
+        },
+        "metadata_coverage": "unknown",
+        "mounts": [
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/usr"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/sdk"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/input"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/native"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/work"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/run/empty"
+          },
+          {
+            "filesystem": "proc",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/proc"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/dev"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/null"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/zero"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/full"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/random"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/urandom"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/tty"
+          },
+          {
+            "filesystem": "devpts",
+            "flags": [
+              "rw",
+              "nosuid",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/dev/pts"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/tmp"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/kfd"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/dri/renderD128"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/devices"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/kfd"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/drm"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/bus/pci"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/dev/char"
+          }
+        ],
+        "namespaces": {
+          "ipc": "ipc:[4026533195]",
+          "mnt": "mnt:[4026533133]",
+          "net": "net:[4026533207]",
+          "pid": "pid:[4026533205]",
+          "user": "user:[4026533325]"
+        },
+        "phase": "gpu",
+        "sdk_identity": [
+          56,
+          146139371
+        ],
+        "seccomp": "0",
+        "uid": 1000,
+        "vendor_authenticity": "unverified"
+      },
+      "measurement": {
+        "cases": [
+          {
+            "baseline_median_us": 6.844944953918457,
+            "baseline_us_per_launch": [
+              6.840140223503113,
+              6.845340132713318,
+              6.8385398387908936,
+              6.840540170669556,
+              6.848959922790527,
+              6.812090277671814,
+              6.84535026550293,
+              6.844549775123596,
+              6.822509765625,
+              6.848160028457642,
+              6.822909712791443,
+              6.8537598848342896,
+              6.826909780502319,
+              6.82811975479126,
+              6.856570243835449,
+              6.879010200500488,
+              6.872199773788452,
+              6.875799894332886,
+              6.835730075836182,
+              6.911879777908325
+            ],
+            "candidate_median_us": 2.424589991569519,
+            "candidate_us_per_launch": [
+              2.424989938735962,
+              2.4257899820804596,
+              2.4257899820804596,
+              2.4839000403881073,
+              2.417770028114319,
+              2.4133700132369995,
+              2.419780045747757,
+              2.424190044403076,
+              2.4233800172805786,
+              2.414969950914383,
+              2.4205799400806427,
+              2.415360063314438,
+              2.427790015935898,
+              2.449840009212494,
+              2.430189996957779,
+              2.4285900592803955,
+              2.430189996957779,
+              2.4261899292469025,
+              2.4237899482250214,
+              2.4205799400806427
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022556199382085,
+            "input_digest": "964fd7c2a0996a4ddb3278276cbd073b4c6dccef45c161bef934be6e6a35021d",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 2.82313503632319
+          },
+          {
+            "baseline_median_us": 10.116735100746155,
+            "baseline_us_per_launch": [
+              10.141479969024658,
+              10.1003098487854,
+              10.107909440994263,
+              10.107120275497437,
+              10.104310512542725,
+              10.10470986366272,
+              10.117130279541016,
+              10.13556957244873,
+              10.100699663162231,
+              10.132759809494019,
+              10.10632038116455,
+              10.13998031616211,
+              10.116339921951294,
+              10.10632038116455,
+              10.1003098487854,
+              10.133559703826904,
+              17.614519596099854,
+              10.135970115661621,
+              10.117130279541016,
+              10.186070203781128
+            ],
+            "candidate_median_us": 2.4458249658346176,
+            "candidate_us_per_launch": [
+              2.4434199929237366,
+              2.4438199400901794,
+              2.4442200362682343,
+              2.4987199902534485,
+              2.442210018634796,
+              2.4490299820899963,
+              2.4578499794006348,
+              2.4458199739456177,
+              2.455040067434311,
+              2.4442200362682343,
+              2.4434199929237366,
+              2.447029948234558,
+              2.4502399563789368,
+              2.47748002409935,
+              2.437009960412979,
+              2.4434299767017365,
+              2.5360000133514404,
+              2.4434199929237366,
+              2.4458299577236176,
+              2.4458299577236176
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022556199382373,
+            "input_digest": "1d585111f3212e785b7fb386f067246d0c08ebed75472683fde098755f379097",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 4.136328331775738
+          },
+          {
+            "baseline_median_us": 14.960864782333374,
+            "baseline_us_per_launch": [
+              14.943829774856567,
+              14.927799701690674,
+              14.926199913024902,
+              14.971879720687866,
+              14.939819574356079,
+              14.94663953781128,
+              14.971879720687866,
+              14.969480037689209,
+              14.937419891357422,
+              14.962660074234009,
+              14.964669942855835,
+              14.991120100021362,
+              14.960659742355347,
+              14.961069822311401,
+              14.940619468688965,
+              14.974279403686523,
+              14.972679615020752,
+              14.942220449447632,
+              14.924190044403076,
+              14.994720220565796
+            ],
+            "candidate_median_us": 2.799685001373291,
+            "candidate_us_per_launch": [
+              2.8077098727226257,
+              2.797290086746216,
+              2.797290086746216,
+              2.865009903907776,
+              2.797290086746216,
+              2.8033000230789185,
+              2.8153198957443237,
+              2.7956798672676086,
+              2.794879972934723,
+              2.797290086746216,
+              2.80009001493454,
+              2.80009001493454,
+              2.799690067768097,
+              2.822529971599579,
+              2.787260115146637,
+              2.796880006790161,
+              2.819730043411255,
+              2.799679934978485,
+              2.7952799201011658,
+              2.8133198618888855
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022556199381093,
+            "input_digest": "ebddd99fc20914022af9a118ae8781002cdd04c306feff2ef0a37b3aca9c14f5",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 5.343767164875629
+          },
+          {
+            "baseline_median_us": 6.950930058956146,
+            "baseline_us_per_launch": [
+              6.963949799537659,
+              6.949530243873596,
+              6.943920254707336,
+              6.9467198848724365,
+              6.9363099336624146,
+              6.947919726371765,
+              6.973170042037964,
+              6.9767701625823975,
+              6.938310265541077,
+              6.973170042037964,
+              6.94832980632782,
+              6.977580189704895,
+              6.952329874038696,
+              7.007539868354797,
+              6.936299800872803,
+              6.986799836158752,
+              6.980389952659607,
+              6.936699748039246,
+              6.943920254707336,
+              7.0044296979904175
+            ],
+            "candidate_median_us": 2.450834959745407,
+            "candidate_us_per_launch": [
+              2.452639937400818,
+              2.4542400240898132,
+              2.4542300403118134,
+              2.495120018720627,
+              2.450229972600937,
+              2.450229972600937,
+              2.472269982099533,
+              2.4458199739456177,
+              2.4434199929237366,
+              2.440609931945801,
+              2.449820041656494,
+              2.4514399468898773,
+              2.4466200172901154,
+              2.4810899794101715,
+              2.4534399807453156,
+              2.4434199929237366,
+              2.4686600267887115,
+              2.450229972600937,
+              2.4534299969673157,
+              2.449820041656494
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022285616442437,
+            "input_digest": "7e54156e4ae39c0987220d992373fc6f65c8dc42e54bef634c7ad98963949364",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 2.8361477509192254
+          },
+          {
+            "baseline_median_us": 10.873949527740479,
+            "baseline_us_per_launch": [
+              10.978549718856812,
+              10.867739915847778,
+              10.86253046989441,
+              10.839680433273315,
+              10.883369445800781,
+              10.866940021514893,
+              10.905410051345825,
+              10.884569883346558,
+              10.866940021514893,
+              10.911020040512085,
+              10.881359577178955,
+              10.888170003890991,
+              10.861330032348633,
+              10.875749588012695,
+              10.872149467468262,
+              10.899790525436401,
+              10.866940021514893,
+              10.865739583969116,
+              10.864139795303345,
+              10.91702938079834
+            ],
+            "candidate_median_us": 2.5091400742530823,
+            "candidate_us_per_launch": [
+              2.5039300322532654,
+              2.5083398818969727,
+              2.5107398629188538,
+              2.560429871082306,
+              2.5007200241088867,
+              2.60903000831604,
+              2.5622400641441345,
+              2.5055399537086487,
+              2.5159499049186707,
+              2.5091400742530823,
+              2.5059399008750916,
+              2.5063300132751465,
+              2.512750029563904,
+              2.5380000472068787,
+              2.5035300850868225,
+              2.514750063419342,
+              2.552019953727722,
+              2.5091400742530823,
+              2.507539987564087,
+              2.4931100010871887
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022285616442725,
+            "input_digest": "dfb9e71b152e61d990c2a30aa9e4d02d71f3372f53d6b57745bfb8427d8bcfbc",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 4.333735545225558
+          },
+          {
+            "baseline_median_us": 28.773369789123535,
+            "baseline_us_per_launch": [
+              28.818159103393555,
+              28.76636028289795,
+              28.747920989990234,
+              28.75593900680542,
+              28.77837896347046,
+              28.745920658111572,
+              28.802030086517334,
+              28.78319025039673,
+              28.764750957489014,
+              28.79641056060791,
+              28.78037929534912,
+              28.794009685516357,
+              28.76836061477661,
+              28.764750957489014,
+              28.757939338684082,
+              28.799219131469727,
+              28.800020217895508,
+              28.739099502563477,
+              28.710250854492188,
+              28.80441904067993
+            ],
+            "candidate_median_us": 2.880840003490448,
+            "candidate_us_per_launch": [
+              2.879039943218231,
+              2.8838500380516052,
+              2.879439890384674,
+              2.934350073337555,
+              2.8858500719070435,
+              2.8934699296951294,
+              2.854200005531311,
+              2.859399914741516,
+              2.8878599405288696,
+              2.8734299540519714,
+              2.8814399242401123,
+              2.879840135574341,
+              2.8758299350738525,
+              2.899880111217499,
+              2.881839871406555,
+              2.8854599595069885,
+              2.8982800245285034,
+              2.8802400827407837,
+              2.874229848384857,
+              2.8634101152420044
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022285616441445,
+            "input_digest": "4212de40d216507494cd35f0acb4b9da0031355998a872221e78e4ba4a04cdcf",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 9.987840266818532
+          }
+        ],
+        "cleanup_errors": [],
+        "device": {
+          "architecture": "gfx1151",
+          "name": "AMD Radeon 8060S Graphics",
+          "pci_bus": 194,
+          "pci_device": 0,
+          "pci_domain": 0
+        },
+        "device_count": 1,
+        "external_limits_required": {
+          "cpu_seconds": 20,
+          "device_bytes": 268435456,
+          "wall_seconds": 30
+        },
+        "failure": null,
+        "fixture": "rocm10-topk-k1-compare-v1",
+        "generator": "research-distinct-shuffle-v1",
+        "hip_compile_version": [
+          7,
+          15,
+          26333
+        ],
+        "hip_driver_version": 71526333,
+        "hip_runtime_version": 71526333,
+        "launches_per_batch": 100,
+        "loaded_paths": [
+          "",
+          "linux-vdso.so.1",
+          "/usr/lib/libcrypto.so.3",
+          "/sdk/lib/libamdhip64.so.7",
+          "/usr/lib/libstdc++.so.6",
+          "/usr/lib/libm.so.6",
+          "/usr/lib/libgcc_s.so.1",
+          "/usr/lib/libc.so.6",
+          "/usr/lib/libz.so.1",
+          "/usr/lib/libbrotlienc.so.1",
+          "/usr/lib/libbrotlidec.so.1",
+          "/usr/lib/libzstd.so.1",
+          "/usr/lib/libdl.so.2",
+          "/sdk/lib/librocm_kpack.so.0",
+          "/sdk/lib/librocprofiler-register.so.0",
+          "/usr/lib/librt.so.1",
+          "/sdk/lib/libamd_comgr.so.3",
+          "/sdk/lib/libhsa-runtime64.so.1",
+          "/usr/lib/libpthread.so.0",
+          "/lib64/ld-linux-x86-64.so.2",
+          "/usr/lib/libbrotlicommon.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1",
+          "/sdk/lib/llvm/lib/libclang-cpp.so.23.0git",
+          "/sdk/lib/llvm/lib/libLLVM.so.23.0git",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_elf.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm.so.2",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so.5",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so",
+          "/sdk/lib/libhsa-amd-aqlprofile64.so"
+        ],
+        "loaded_paths_complete": true,
+        "metadata_coverage": "unknown",
+        "pair_order": "even baseline,candidate; odd candidate,baseline; zero-based",
+        "paired_samples": 20,
+        "requested_device_allocation_bytes": 524800,
+        "research_comparison_valid": true,
+        "schema_version": 1,
+        "scope": "private-research-only; not fixed-v1 or provider qualification",
+        "semantics": "K=1 original column index of maximum value, finite F32 distinct values per row; CPU bit-value/index oracle; no tie/NaN/general-K qualification",
+        "success": true,
+        "timing_scope": "HIP event batch elapsed / 100; all provider stream work including baseline D2D index copy and possible host enqueue gaps; excludes input transfer, validation, allocation, event creation",
+        "vendor_authenticity": "unverified",
+        "warmup_batches_per_provider": 5
+      }
+    },
+    {
+      "trial": "trial2",
+      "evidence": {
+        "phase": "run-k1-02",
+        "phase_sha256": "164d061399a2a546a16bc5cbc908267968bff3156be3e749fcbb816528dea154",
+        "status": "process-complete",
+        "process": {
+          "elapsed_seconds": 0.6103805731981993,
+          "failure": null,
+          "log_bytes": 11475,
+          "returncode": 0
+        },
+        "diagnostic": false,
+        "prefix_before": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-before.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "prefix_after": {
+          "bytes": 87465955,
+          "evidence_bytes_charged": 177169192,
+          "member_count": 27627,
+          "path": "prefix-after.json",
+          "physical_equal": true,
+          "resolved_links": 305,
+          "semantic_equal": true,
+          "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+        },
+        "launcher_sha256": "658c4253d96c147cc4e7681e4a8ba0a32140034cb60e494ab2fc8bb5e53b9c3b",
+        "inputs": {
+          "preflight_exec.py": {
+            "bytes": 8886,
+            "path": "preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          "topk-k1-compare": {
+            "bytes": 191688,
+            "path": "topk-k1-compare",
+            "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+          }
+        },
+        "outputs": [
+          {
+            "bytes": 8886,
+            "path": "input/preflight_exec.py",
+            "sha256": "44f3051e0b2ed3820ecf1bcb0f5f89bb8cd87901303bb3694e3c989bc20acf8f"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-after.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 87465955,
+            "path": "prefix-before.json",
+            "sha256": "260840005600e2b590e6135478966f95dc1587768d5a59808db4e154be56e1d9"
+          },
+          {
+            "bytes": 0,
+            "path": "stderr.log",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "bytes": 11475,
+            "path": "stdout.log",
+            "sha256": "021cf8e1ac3f6427b8d282eb3a24ae922ef4fa3542a22dec5665055b0c2b7fb1"
+          },
+          {
+            "bytes": 191688,
+            "path": "work/topk-k1-compare",
+            "sha256": "2f62d426953a1be1d2fbb83f7367b12018ec380ba09c6e084140a94cf06d97d8"
+          }
+        ],
+        "lock_release": {
+          "sha256": "824889b2c603c582451b133ee256ac0a2e61064a59d3b7d1f426c91993cd8437",
+          "released": true,
+          "phase_sha256": "164d061399a2a546a16bc5cbc908267968bff3156be3e749fcbb816528dea154",
+          "method": "exclusive_lock context exited"
+        }
+      },
+      "preflight": {
+        "event": "preflight_pass",
+        "gid": 1000,
+        "gpu_devices": {
+          "/dev/dri/renderD128": [
+            226,
+            128
+          ],
+          "/dev/kfd": [
+            237,
+            0
+          ]
+        },
+        "metadata_coverage": "unknown",
+        "mounts": [
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/usr"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/sdk"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/input"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/native"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/work"
+          },
+          {
+            "filesystem": "btrfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/run/empty"
+          },
+          {
+            "filesystem": "proc",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/proc"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/dev"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/null"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/zero"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/full"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/random"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/urandom"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/tty"
+          },
+          {
+            "filesystem": "devpts",
+            "flags": [
+              "rw",
+              "nosuid",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/dev/pts"
+          },
+          {
+            "filesystem": "tmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "nodev",
+              "relatime"
+            ],
+            "path": "/tmp"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/kfd"
+          },
+          {
+            "filesystem": "devtmpfs",
+            "flags": [
+              "rw",
+              "nosuid",
+              "relatime"
+            ],
+            "path": "/dev/dri/renderD128"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/devices"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/kfd"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/class/drm"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/bus/pci"
+          },
+          {
+            "filesystem": "sysfs",
+            "flags": [
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec",
+              "relatime"
+            ],
+            "path": "/sys/dev/char"
+          }
+        ],
+        "namespaces": {
+          "ipc": "ipc:[4026533139]",
+          "mnt": "mnt:[4026533126]",
+          "net": "net:[4026533206]",
+          "pid": "pid:[4026533195]",
+          "user": "user:[4026533324]"
+        },
+        "phase": "gpu",
+        "sdk_identity": [
+          56,
+          146139371
+        ],
+        "seccomp": "0",
+        "uid": 1000,
+        "vendor_authenticity": "unverified"
+      },
+      "measurement": {
+        "cases": [
+          {
+            "baseline_median_us": 6.87437504529953,
+            "baseline_us_per_launch": [
+              6.973569989204407,
+              6.852930188179016,
+              6.85172975063324,
+              6.930980086326599,
+              6.86735987663269,
+              6.8721699714660645,
+              6.89661979675293,
+              6.895409822463989,
+              6.856139898300171,
+              6.888610124588013,
+              6.876580119132996,
+              6.901829838752747,
+              6.849719882011414,
+              6.882489919662476,
+              6.827690005302429,
+              6.9070398807525635,
+              6.868169903755188,
+              6.856139898300171,
+              6.8621498346328735,
+              6.904630064964294
+            ],
+            "candidate_median_us": 2.431590035557747,
+            "candidate_us_per_launch": [
+              2.4217799305915833,
+              2.4486200511455536,
+              2.4309900403022766,
+              2.4834899604320526,
+              2.430589944124222,
+              2.4237799644470215,
+              2.422170042991638,
+              3.9498600363731384,
+              2.43258997797966,
+              2.4281899631023407,
+              2.432190030813217,
+              2.427780032157898,
+              2.434599995613098,
+              2.453030049800873,
+              2.4189600348472595,
+              2.419770061969757,
+              2.5929000973701477,
+              2.4333900213241577,
+              2.4337899684906006,
+              2.430180013179779
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022556199382085,
+            "input_digest": "964fd7c2a0996a4ddb3278276cbd073b4c6dccef45c161bef934be6e6a35021d",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 2.827111044532109
+          },
+          {
+            "baseline_median_us": 10.158175230026245,
+            "baseline_us_per_launch": [
+              10.170400142669678,
+              10.120710134506226,
+              10.161980390548706,
+              10.116690397262573,
+              10.145549774169922,
+              10.139540433883667,
+              10.154370069503784,
+              10.176409482955933,
+              10.135940313339233,
+              10.165189504623413,
+              10.301140546798706,
+              10.176810026168823,
+              10.147960186004639,
+              10.217080116271973,
+              10.145950317382812,
+              10.164380073547363,
+              10.167989730834961,
+              10.141949653625488,
+              10.145950317382812,
+              10.201660394668579
+            ],
+            "candidate_median_us": 2.4552349746227264,
+            "candidate_us_per_launch": [
+              2.450229972600937,
+              2.4506299197673798,
+              2.4582399427890778,
+              2.5083300471305847,
+              2.4642500281333923,
+              2.452230006456375,
+              2.8782400488853455,
+              2.6579201221466064,
+              2.4586400389671326,
+              2.453030049800873,
+              2.455440014600754,
+              2.455029934644699,
+              2.4538299441337585,
+              2.4738699197769165,
+              2.4542300403118134,
+              2.4546299874782562,
+              2.617950141429901,
+              2.4538299441337585,
+              2.4522200226783752,
+              2.4570299685001373
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022556199382373,
+            "input_digest": "1d585111f3212e785b7fb386f067246d0c08ebed75472683fde098755f379097",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 4.1373535873433696
+          },
+          {
+            "baseline_median_us": 15.071145296096802,
+            "baseline_us_per_launch": [
+              15.16090989112854,
+              15.029170513153076,
+              15.040780305862427,
+              15.073050260543823,
+              15.114129781723022,
+              15.040390491485596,
+              15.074859857559204,
+              15.076459646224976,
+              15.031980276107788,
+              15.064029693603516,
+              15.257999897003174,
+              15.085270404815674,
+              15.043189525604248,
+              15.190470218658447,
+              15.034370422363281,
+              15.07485032081604,
+              15.07444977760315,
+              15.02676010131836,
+              15.01675009727478,
+              15.06924033164978
+            ],
+            "candidate_median_us": 2.8437700867652893,
+            "candidate_us_per_launch": [
+              2.8541800379753113,
+              2.844170033931732,
+              2.84976989030838,
+              2.9038798809051514,
+              2.83735990524292,
+              2.842569947242737,
+              3.6444801092147827,
+              3.0457499623298645,
+              2.8433701395988464,
+              2.842159867286682,
+              2.8513899445533752,
+              2.8385499119758606,
+              2.8630000352859497,
+              2.8513801097869873,
+              2.8429600596427917,
+              2.842560112476349,
+              3.0661898851394653,
+              2.837759852409363,
+              2.834950089454651,
+              2.824130058288574
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022556199381093,
+            "input_digest": "ebddd99fc20914022af9a118ae8781002cdd04c306feff2ef0a37b3aca9c14f5",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 1,
+            "baseline_over_candidate_median_ratio": 5.299705966469258
+          },
+          {
+            "baseline_median_us": 7.030070126056671,
+            "baseline_us_per_launch": [
+              7.230849862098694,
+              7.037680149078369,
+              7.044090032577515,
+              7.131459712982178,
+              7.095590233802795,
+              6.984379887580872,
+              7.009230256080627,
+              7.0196497440338135,
+              6.997609734535217,
+              7.132269740104675,
+              7.227150201797485,
+              7.022460103034973,
+              7.002419829368591,
+              7.217230200767517,
+              7.002019882202148,
+              7.020049691200256,
+              6.994799971580505,
+              7.158719897270203,
+              7.019249796867371,
+              7.098199725151062
+            ],
+            "candidate_median_us": 2.481684982776642,
+            "candidate_us_per_launch": [
+              2.505120038986206,
+              2.491910010576248,
+              2.4883000552654266,
+              2.5436100363731384,
+              2.455430030822754,
+              2.479880005121231,
+              3.0451500415802,
+              2.9283300042152405,
+              2.4590399861335754,
+              2.4714699387550354,
+              2.470259964466095,
+              2.4662500619888306,
+              2.4570299685001373,
+              2.4834899604320526,
+              2.475070059299469,
+              2.464260011911392,
+              2.6448899507522583,
+              2.463050037622452,
+              2.492699921131134,
+              2.4834899604320526
+            ],
+            "columns": 32,
+            "correctness": true,
+            "initial_state": 8316022285616442437,
+            "input_digest": "7e54156e4ae39c0987220d992373fc6f65c8dc42e54bef634c7ad98963949364",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 2.8327810237184305
+          },
+          {
+            "baseline_median_us": 10.963889956474304,
+            "baseline_us_per_launch": [
+              11.06227993965149,
+              10.915800333023071,
+              10.88014006614685,
+              10.90859055519104,
+              10.954669713973999,
+              10.851680040359497,
+              10.919409990310669,
+              10.924619436264038,
+              10.898970365524292,
+              10.927029848098755,
+              11.181299686431885,
+              11.013189554214478,
+              10.952270030975342,
+              11.136729717254639,
+              10.975509881973267,
+              11.005170345306396,
+              10.993150472640991,
+              10.97311019897461,
+              10.999970436096191,
+              11.014800071716309
+            ],
+            "candidate_median_us": 2.5554250180721283,
+            "candidate_us_per_launch": [
+              2.525160014629364,
+              2.522760033607483,
+              2.5215598940849304,
+              2.5780698657035828,
+              2.5263699889183044,
+              2.5187501311302185,
+              2.6517000794410706,
+              2.8914600610733032,
+              2.6786598563194275,
+              2.522769868373871,
+              2.5532200932502747,
+              2.557229995727539,
+              2.560429871082306,
+              2.562839984893799,
+              2.547610104084015,
+              2.562440037727356,
+              2.771739959716797,
+              2.5684499740600586,
+              2.5536200404167175,
+              2.5480100512504578
+            ],
+            "columns": 256,
+            "correctness": true,
+            "initial_state": 8316022285616442725,
+            "input_digest": "dfb9e71b152e61d990c2a30aa9e4d02d71f3372f53d6b57745bfb8427d8bcfbc",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 4.290436964081112
+          },
+          {
+            "baseline_median_us": 28.794350624084473,
+            "baseline_us_per_launch": [
+              28.90826940536499,
+              28.74505043029785,
+              28.751869201660156,
+              28.73142957687378,
+              28.76028060913086,
+              28.740649223327637,
+              28.77631902694702,
+              28.806769847869873,
+              28.758680820465088,
+              28.800358772277832,
+              28.777918815612793,
+              28.799960613250732,
+              28.78153085708618,
+              28.788740634918213,
+              28.908960819244385,
+              28.92699956893921,
+              28.890531063079834,
+              28.8456392288208,
+              28.84484052658081,
+              28.82641077041626
+            ],
+            "candidate_median_us": 2.895064949989319,
+            "candidate_us_per_launch": [
+              2.887449860572815,
+              2.8862500190734863,
+              2.879439890384674,
+              2.9383501410484314,
+              2.8918498754501343,
+              2.8830400109291077,
+              2.941260039806366,
+              2.89465993642807,
+              2.879830002784729,
+              2.8826498985290527,
+              2.8906598687171936,
+              2.8954699635505676,
+              2.882240116596222,
+              2.9162999987602234,
+              2.9034799337387085,
+              2.905080020427704,
+              2.966800034046173,
+              2.93954998254776,
+              3.0810201168060303,
+              2.911500036716461
+            ],
+            "columns": 1024,
+            "correctness": true,
+            "initial_state": 8316022285616441445,
+            "input_digest": "4212de40d216507494cd35f0acb4b9da0031355998a872221e78e4ba4a04cdcf",
+            "k": 1,
+            "post_timing_correctness": true,
+            "rows": 64,
+            "baseline_over_candidate_median_ratio": 9.946011962250003
+          }
+        ],
+        "cleanup_errors": [],
+        "device": {
+          "architecture": "gfx1151",
+          "name": "AMD Radeon 8060S Graphics",
+          "pci_bus": 194,
+          "pci_device": 0,
+          "pci_domain": 0
+        },
+        "device_count": 1,
+        "external_limits_required": {
+          "cpu_seconds": 20,
+          "device_bytes": 268435456,
+          "wall_seconds": 30
+        },
+        "failure": null,
+        "fixture": "rocm10-topk-k1-compare-v1",
+        "generator": "research-distinct-shuffle-v1",
+        "hip_compile_version": [
+          7,
+          15,
+          26333
+        ],
+        "hip_driver_version": 71526333,
+        "hip_runtime_version": 71526333,
+        "launches_per_batch": 100,
+        "loaded_paths": [
+          "",
+          "linux-vdso.so.1",
+          "/usr/lib/libcrypto.so.3",
+          "/sdk/lib/libamdhip64.so.7",
+          "/usr/lib/libstdc++.so.6",
+          "/usr/lib/libm.so.6",
+          "/usr/lib/libgcc_s.so.1",
+          "/usr/lib/libc.so.6",
+          "/usr/lib/libz.so.1",
+          "/usr/lib/libbrotlienc.so.1",
+          "/usr/lib/libbrotlidec.so.1",
+          "/usr/lib/libzstd.so.1",
+          "/usr/lib/libdl.so.2",
+          "/sdk/lib/librocm_kpack.so.0",
+          "/sdk/lib/librocprofiler-register.so.0",
+          "/usr/lib/librt.so.1",
+          "/sdk/lib/libamd_comgr.so.3",
+          "/sdk/lib/libhsa-runtime64.so.1",
+          "/usr/lib/libpthread.so.0",
+          "/lib64/ld-linux-x86-64.so.2",
+          "/usr/lib/libbrotlicommon.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_zstd.so.1",
+          "/sdk/lib/llvm/lib/libclang-cpp.so.23.0git",
+          "/sdk/lib/llvm/lib/libLLVM.so.23.0git",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_z.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_elf.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm.so.2",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_drm_amdgpu.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_numa.so.1",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_liblzma.so.5",
+          "/sdk/lib/rocm_sysdeps/lib/librocm_sysdeps_bz2.so",
+          "/sdk/lib/libhsa-amd-aqlprofile64.so"
+        ],
+        "loaded_paths_complete": true,
+        "metadata_coverage": "unknown",
+        "pair_order": "even baseline,candidate; odd candidate,baseline; zero-based",
+        "paired_samples": 20,
+        "requested_device_allocation_bytes": 524800,
+        "research_comparison_valid": true,
+        "schema_version": 1,
+        "scope": "private-research-only; not fixed-v1 or provider qualification",
+        "semantics": "K=1 original column index of maximum value, finite F32 distinct values per row; CPU bit-value/index oracle; no tie/NaN/general-K qualification",
+        "success": true,
+        "timing_scope": "HIP event batch elapsed / 100; all provider stream work including baseline D2D index copy and possible host enqueue gaps; excludes input transfer, validation, allocation, event creation",
+        "vendor_authenticity": "unverified",
+        "warmup_batches_per_provider": 5
+      }
+    }
+  ]
+}

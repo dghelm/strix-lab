@@ -135,8 +135,9 @@ the accepted scenario unchanged.
 and authenticates this contract. D2b1 adds the pure offline
 `compare_finalized_capsule_runs` boundary: it loads baseline then candidate, applies the
 closed admission projection, computes the directional statistics and verdicts, and returns
-a canonical in-memory report. It does not write evidence, allocate a run, publish a bundle,
-interpret TOPK payloads, or expose comparison CLI dispatch. Reversing the arms intentionally
+a canonical in-memory report. The pure comparator does not write evidence, allocate a run,
+publish a bundle, or interpret TOPK payloads. The separate publication wrapper below
+provides CLI dispatch. Reversing the arms intentionally
 produces a different directional comparison; equal candidate IDs remain legal.
 
 For a coordinate with `n` positionally paired positive finite samples, the mathematical
@@ -290,8 +291,42 @@ available. The snapshot independently
 reauthenticates the scenario comparison contract against the manifest and exposes its
 canonical digest, permitted-difference tuple, and ordered `(case_set, case_id, mode)`
 alignment keys without deciding admission. The planned TOPK scenario remains inactive:
-there is no checked-in runnable capsule configuration, comparison evidence/CLI dispatch,
-or TOPK payload interpretation.
+there is no checked-in runnable capsule configuration or TOPK payload interpretation.
+
+### Derived capsule comparison publication
+
+`strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID --kind capsule [--home PATH]`
+selects the offline capsule comparator. The existing two positional arguments and default
+suite comparison remain unchanged; `--kind suite` explicitly selects that default. Mixed
+run kinds fail authentication rather than falling back to another comparator.
+
+`compare_capsule_runs` in `capsule_comparison_runs.py` calls the unchanged pure comparator,
+renders a deterministic Markdown projection, and preflights exact output bytes for portable
+media, member/aggregate capacity, and secrets before allocating a run. The captured and
+resolved request binds the ordered source run IDs and record digests, comparison policy and
+contract digest, canonical JSON report digest, and Markdown digest. Its experiment ID is
+`capsule-compare-` plus the first 24 hex characters of SHA-256 over canonical request JSON.
+Immediately before publication, both finalized capsule snapshots are fully reauthenticated
+and their record digests must still match the report. This uses the existing owning-UID
+storage trust boundary; it does not add hardware or build leases.
+
+The wrapper owns a fresh derived `RunSession` and never modifies either source arm. It
+writes exactly `comparison/report.json` (`application/json`) and `comparison/report.md`
+(`text/markdown`), both with role `comparison`. The JSON is the exact canonical comparator
+output; Markdown only renders its typed fields. Opaque payloads remain non-semantic.
+Every valid statistical verdict finalizes `SUCCESS`, including regression, mixed, and
+inconclusive. Errors before allocation create no run. Errors after allocation use existing
+failure finalization and expose only a fixed-safe error, run ID, and available record path;
+any already committed portable entries remain evidence. Integrity failures that prevent
+finalization retain the existing recovery behavior rather than claiming a terminal record.
+
+Repeating a command creates a new run with identical request/report bytes for unchanged arms;
+it does not deduplicate or overwrite evidence. Existing run finalization and recovery remain
+idempotent. Normal bundle export/verification applies. This is a derived report, not a
+standalone proof of both arms: export both source-run bundles for independent verification.
+Host-only publication tests cover authenticated fake arms, exact bytes, repeat and reversed
+arms, bundle verification, rejected inputs, secret preflight, record drift, publication and
+finalization failures, and CLI dispatch. No GPU or TOPK semantics are required.
 
 ## Future challenge boundary
 
@@ -511,6 +546,52 @@ only inspection value excluded from any comparison is the raw `ldd` process
 digest, and only from rehydrate equivalence, because it is attempt-variable (ASLR
 randomizes the load addresses in `ldd` output); every other captured field must
 match.
+
+### Fixed native host fixture build policy
+
+The existing command `strixlab build prepare PREPARATION_ID BUILD_PROFILE [--home PATH]`
+accepts the source adapter `strixlab_native` only for `toolchain.mode: host` and exactly
+one requested target, `topk_capsule_host_test`. Other targets or modes, including a
+production HIP target, fail before allocating a build attempt. This is a fixed policy,
+not a plugin registry or an arbitrary executable/subdirectory option. The existing
+`llama_cpp` configure arguments, target policy, and recipe identities are preserved.
+
+Both CMake configurations use the authenticated snapshot's fixed `native/topk` directory.
+Its `native`, `topk`, and `CMakeLists.txt` components must have real directory/file types;
+symlinks are rejected. Snapshotting and source reproduction still cover the whole source
+tree, including files outside that CMake subtree and the native worker's pinned vendored
+JSON header, license, and provenance. No dependency is fetched during configure. The
+source adapter already participates in the recipe identity; any incompatible future
+change to this fixed native policy requires a new adapter identity.
+
+Native configuration receives `STRIXLAB_NATIVE_BUILD_COMMIT` (the exact source base
+commit with the existing `-dirty` suffix when patches are present) and
+`STRIXLAB_NATIVE_BUILD_NUMBER=0`. These native keys, the fixed CMake source directory,
+and HIP/gfx selections cannot be overridden through the native profile. Native builds
+do not receive or accept fabricated LLAMA/GGML version metadata. Probe and final caches
+must bind the fixed source directory and native version, and the current cache is checked
+again before success, including cache hits and rehydration.
+
+The native project declares C and CXX. Existing C/C++ compiler, linker and archiver
+selection and executable observations remain mandatory. File API discovery, ELF checks,
+resolved runtime dependencies, content hashing, source revalidation, canonical records,
+producer attestations, cache ownership and build leases all retain their existing rules.
+In-build shared libraries need loader-valid paths: an absolute RPATH containing the
+`build-sha256:` directory name is split at its colon by the loader; use origin-relative
+RPATHs. Unresolved dependencies fail the build rather than weakening closure checks.
+
+A genuine host build can be leased and its named executable resolved for an explicit
+test caller of `run_capsule_protocol`. It has no HIP compiler or gfx selection and cannot
+satisfy production `run_capsule` build admission. No host-as-GPU claim, production TOPK
+manifest, or comparison-policy change is introduced. A future production milestone must
+separately authorize an actual HIP provider target, observe its compiler/ROCm/gfx identity,
+and pass normal build, lease, machine, capsule run, and comparison gates.
+
+Host tests use an actual local Git source, CMake/Ninja compilation and shared-library
+closure, then verify the canonical record and lease, cache hit and rehydration, rejected
+source paths and selections, source/artifact/cache mutation, and unchanged rejection of
+a host build by production capsule admission. Synthetic fixture output is test evidence,
+not TOPK performance evidence.
 
 ## Run evidence v1
 

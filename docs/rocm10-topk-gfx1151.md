@@ -2,9 +2,9 @@
 
 > **Status: planned; not runnable.** The generic native-capsule protocol, production
 > runner, finalized snapshot authentication, closed comparison contract, and pure offline
-> directional comparison are delivered. There is still intentionally no runnable top-k
-> capsule manifest: comparison evidence/CLI dispatch and TOPK-001 payload/provider
-> semantics remain deferred. Do not
+> directional comparison with derived evidence publication and explicit `--kind capsule`
+> CLI dispatch are delivered. There is still intentionally no runnable top-k capsule
+> manifest: TOPK-001 payload/provider semantics remain deferred. Do not
 > create experiments until the trusted TOPK capsule and versioned scenario manifest land.
 
 The planned scenario asks which one trusted top-k provider gives the best
@@ -20,7 +20,7 @@ StrixLab can bind a run to a machine profile, pinned source and build records, a
 resolved manifest digest, immutable evidence, a correctness-first schedule, portable
 bundles, and a conservative model-suite comparison. It also has the generic capsule
 manifest/protocol/runner/snapshot boundary and the closed scenario-neutral capsule
-comparison contract. This top-k scenario is still inactive because:
+comparison contract. The boundaries are:
 
 - `SuiteManifestV1` requires a model plus `test-backend-ops`, `llama-server`,
   and `llama-bench` cases.
@@ -28,14 +28,17 @@ comparison contract. This top-k scenario is still inactive because:
   model-bound suite results.
 - the comparison judge authenticates and compares those finalized model-suite
   results and their throughput samples.
-- derived comparison evidence and CLI dispatch are deferred;
-- there is no trusted top-k payload interpreter, provider implementation/registry,
-  correctness reference, or runnable capsule manifest.
+- generic capsule comparison and derived evidence are available through
+  `strixlab compare BASELINE_RUN_ID CANDIDATE_RUN_ID --kind capsule [--home PATH]`;
+- the [native host foundation](../native/topk/README.md) supplies the deterministic
+  input generator, CPU reference, and value/index validator, tested independently;
+- this top-k scenario remains inactive: there is no trusted top-k payload interpreter,
+  provider implementation/registry, or runnable capsule manifest.
 
 Forcing top-k through the llama-server adapter would obscure the operation boundary and
 invent model inputs that the capsule does not need. The delivered capsule seam remains
 narrow and has no adapter plugin ABI or generic workflow engine; the missing work is
-comparison publication/dispatch and the scenario-specific trusted TOPK capsule.
+the scenario-specific trusted TOPK capsule.
 
 ## Fixed scenario contract
 
@@ -333,9 +336,9 @@ universal provider rankings.
 ### CAPSULE-001: narrow native capsule seam
 
 The fixed adapter, production `strixlab run capsule` orchestration, host fake, finalized
-snapshot loader, D2a comparison contracts, and D2b1 pure offline comparison below are
-delivered. Comparison evidence/CLI dispatch remains deferred; step 5 does not authorize a
-runnable TOPK manifest.
+snapshot loader, D2a comparison contracts, D2b1 pure offline comparison, and derived
+comparison evidence/CLI dispatch below are delivered. Step 5 does not authorize a runnable
+TOPK manifest.
 
 1. Define one versioned subprocess contract for a trusted native executable
    with bounded `describe`, `correctness`, and `benchmark` operations and
@@ -350,8 +353,9 @@ runnable TOPK manifest.
    handling without ROCm or a GPU.
 4. D2a defines and authenticates the fixed lower-is-better paired contract. D2b1 loads
    two arms, applies the closed normalization table, and returns canonical in-memory
-   statistics and verdicts. A later slice may publish derived evidence and dispatch it.
-   Keep model-suite comparison behavior unchanged.
+   statistics and verdicts. The separate publication wrapper reauthenticates both arms
+   before writing derived reports through the existing run/bundle lifecycle and dispatches
+   through explicit `--kind capsule`. Model-suite comparison behavior remains unchanged.
 5. Document and test the new manifest, evidence layout, CLI, and no-hardware
    verification path. No top-k manifest lands in this stage.
 
