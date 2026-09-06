@@ -11,6 +11,7 @@ import resource
 import stat
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 NAMESPACES = ("user", "mnt", "pid", "ipc", "net")
 READ_ONLY = {"/usr", "/sdk", "/input", "/native", "/run/empty"}
@@ -28,8 +29,14 @@ def unescape(value: str) -> str:
     return re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
 
 
-def mounts() -> list[dict[str, object]]:
-    result = []
+class Mount(TypedDict):
+    path: str
+    flags: list[str]
+    filesystem: str
+
+
+def mounts() -> list[Mount]:
+    result: list[Mount] = []
     for line in Path("/proc/self/mountinfo").read_text().splitlines():
         first, last = line.split(" - ", 1)
         fields = first.split()
