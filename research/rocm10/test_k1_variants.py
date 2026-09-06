@@ -45,15 +45,16 @@ def host_binary(tmp_path_factory):
 def test_variants_correctness(host_binary):
     result = subprocess.run([str(host_binary)], capture_output=True, text=True, timeout=90)
     assert result.returncode == 0, result.stderr
-    assert result.stdout.startswith("PASS: 90 rows")
+    assert result.stdout.startswith("PASS: 144 rows")
 
 
-def test_wave_requires_32_lanes(host_binary):
+@pytest.mark.parametrize("argument", ["wrong-wave", "wrong-onewave"])
+def test_wave_requires_32_lanes(host_binary, argument):
     def disable_core_dump():
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
     result = subprocess.run(
-        [str(host_binary), "wrong-wave"],
+        [str(host_binary), argument],
         capture_output=True,
         timeout=15,
         preexec_fn=disable_core_dump,

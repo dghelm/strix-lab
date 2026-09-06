@@ -1,4 +1,5 @@
 #include "topk_k1_variants.hpp"
+#include "topk_k1_onewave.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -25,7 +26,8 @@ void check_case(Provider provider, int columns) {
     const auto before = input;
     std::vector<int> out(rows + 2, -9876);
     require(provider(src, out.data() + 1, rows, columns, nullptr) == hipSuccess);
-    require(host_block_size == ((provider == strixlab_topk_k1_small_hip && columns <= 32) ? 32u : 256u));
+    require(host_block_size == ((provider == strixlab_topk_k1_onewave_hip ||
+                                (provider == strixlab_topk_k1_small_hip && columns <= 32)) ? 32u : 256u));
     require(out.front() == -9876 && out.back() == -9876);
     require(std::memcmp(before.data(), input.data(), input.size() * sizeof(float)) == 0);
     for (int row = 0; row < rows; ++row) {
@@ -36,14 +38,17 @@ void check_case(Provider provider, int columns) {
     }
 }
 int main(int argc, char** argv) {
-    if (argc == 2 && std::string(argv[1]) == "wrong-wave") {
+    if (argc == 2 && (std::string(argv[1]) == "wrong-wave" ||
+                      std::string(argv[1]) == "wrong-onewave")) {
         warpSize = 64;
         float input = 1; int out = -1;
-        strixlab_topk_k1_wave_hip(&input, &out, 1, 1, nullptr);
+        Provider provider = std::string(argv[1]) == "wrong-onewave"
+            ? strixlab_topk_k1_onewave_hip : strixlab_topk_k1_wave_hip;
+        provider(&input, &out, 1, 1, nullptr);
         return 0; // Must be unreachable: device assertion must fire in host model.
     }
-    for (Provider provider : {strixlab_topk_k1_small_hip, strixlab_topk_k1_wave_hip}) {
-        for (int columns : {1, 2, 7, 31, 32, 33, 63, 64, 127, 255, 256, 257, 511, 1023, 1024})
+    for (Provider provider : {strixlab_topk_k1_small_hip, strixlab_topk_k1_wave_hip, strixlab_topk_k1_onewave_hip}) {
+        for (int columns : {1, 2, 3, 7, 31, 32, 33, 63, 64, 127, 255, 256, 257, 511, 1023, 1024})
             check_case(provider, columns);
         float input = -1; int output = -1;
         unsigned before = host_launches;
@@ -56,5 +61,5 @@ int main(int argc, char** argv) {
         require(provider(&input, &output, 1, 1, nullptr) == 73);
         host_error = 0;
     }
-    std::cout << "PASS: 90 rows, dispatch, canaries, input preservation, ties, signed zeros, invalid lanes, validation and launch errors\n";
+    std::cout << "PASS: 144 rows, dispatch, canaries, input preservation, ties, signed zeros, invalid lanes, validation and launch errors\n";
 }
