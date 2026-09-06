@@ -77,6 +77,8 @@ def test_fixed_argv_boundary(tmp_path):
         "run-smoke",
         "run-topk",
         "run-k1",
+        "compile-k1-variants",
+        "run-k1-variants",
     ):
         args = m.bwrap_argv(action, tmp_path, tmp_path / "native", "1:2", {}, {}, True)
         assert args[0] == "/usr/bin/bwrap"
@@ -155,34 +157,48 @@ def test_receipt_inside_lease_and_release(tmp_path, monkeypatch, failure):
     assert not active
 
 
-def test_k1_argv_and_cli(monkeypatch, tmp_path):
-    command = m.command_for("compile-k1")
+@pytest.mark.parametrize("artifact", ["k1", "k1-variants"])
+def test_k1_argv_and_cli(monkeypatch, tmp_path, artifact):
+    source, binary = m.artifact_for(f"compile-{artifact}")
+    command = m.command_for(f"compile-{artifact}")
     assert command[0] == "/sdk/lib/llvm/bin/clang++"
     assert "-O3" in command and "--offload-arch=gfx1151" in command
-    assert command[-2:] == ["-o", "/work/topk-k1-compare"]
-    assert "/input/topk_k1_compare.cpp" in command
+    assert command[-2:] == ["-o", f"/work/{binary}"]
+    assert f"/input/{source}" in command
     assert "/native/reference.cpp" in command
-    assert "/native/baseline/adapter/hip_bitonic_topk.cu" in command
+    assert ("/native/baseline/adapter/hip_bitonic_topk.cu" in command) == (artifact == "k1")
     assert "-lcrypto" in command and "-I/native" in command
-    assert m.command_for("run-k1") == ["/work/topk-k1-compare"]
-    for action in ("compile-k1", "run-k1"):
+    assert m.command_for(f"run-{artifact}") == [f"/work/{binary}"]
+    for action in (f"compile-{artifact}", f"run-{artifact}"):
         monkeypatch.setattr(sys, "argv", ["run.py", action, "--output", str(tmp_path / "out")])
         assert m.parse_args().action == action
 
 
-@pytest.mark.parametrize("missing_header", [False, True])
-def test_k1_header_copy_and_pin(tmp_path, monkeypatch, missing_header):
+@pytest.mark.parametrize(
+    "artifact,missing_header",
+    [
+        ("k1", None),
+        ("k1", "topk_k1.hpp"),
+        ("k1-variants", None),
+        ("k1-variants", "topk_k1.hpp"),
+        ("k1-variants", "topk_k1_variants.hpp"),
+    ],
+)
+def test_k1_header_copy_and_pin(tmp_path, monkeypatch, artifact, missing_header):
+    source, binary = m.artifact_for(f"compile-{artifact}")
     for name in ("getuid", "geteuid", "getgid", "getegid"):
         monkeypatch.setattr(m.os, name, lambda: 1000)
     fixtures = tmp_path / "fixtures"
     fixtures.mkdir()
     contents = {
         "preflight_exec.py": b"# inert preflight",
-        "topk_k1_compare.cpp": b"// inert source",
+        source: b"// inert source",
         "topk_k1.hpp": b"// pinned K1 header",
     }
+    if artifact == "k1-variants":
+        contents["topk_k1_variants.hpp"] = b"// pinned variants header"
     for name, data in contents.items():
-        if name != "topk_k1.hpp" or not missing_header:
+        if name != missing_header:
             (fixtures / name).write_bytes(data)
     native = tmp_path / "native"
     native.mkdir()
@@ -198,12 +214,12 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, missing_header):
         assert argv[argv.index("--phase") + 1] == "compile"
         for name, data in contents.items():
             assert (output / "input" / name).read_bytes() == data
-        (output / "work" / "topk-k1-compare").write_bytes(b"\x7fELFinert")
+        (output / "work" / binary).write_bytes(b"\x7fELFinert")
         return {"failure": None, "returncode": 0}
 
     monkeypatch.setattr(m, "run_process", process)
     args = argparse.Namespace(
-        action="compile-k1",
+        action=f"compile-{artifact}",
         output=tmp_path / "out",
         fixtures=fixtures,
         native=native,
@@ -212,17 +228,21 @@ def test_k1_header_copy_and_pin(tmp_path, monkeypatch, missing_header):
         diagnostic=False,
     )
     assert m.main(args) == (1 if missing_header else 0)
-    assert invoked is not missing_header
+    assert invoked == (missing_header is None)
     receipt = json.loads((args.output / "phase.json").read_text())
     if not missing_header:
         for name, data in contents.items():
             assert receipt["inputs"][name]["sha256"] == hashlib.sha256(data).hexdigest()
-        assert any(item["path"] == "work/topk-k1-compare" for item in receipt["outputs"])
+        assert any(item["path"] == f"work/{binary}" for item in receipt["outputs"])
     else:
         assert receipt["status"] == "incomplete"
 
 
-def test_k1_run_copies_only_pinned_binary(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "artifact,bad_digest", [("k1", False), ("k1-variants", False), ("k1-variants", True)]
+)
+def test_k1_run_copies_only_pinned_binary(tmp_path, monkeypatch, artifact, bad_digest):
+    _, binary_name = m.artifact_for(f"run-{artifact}")
     for name in ("getuid", "geteuid", "getgid", "getegid"):
         monkeypatch.setattr(m.os, name, lambda: 1000)
     fixtures = tmp_path / "fixtures"
@@ -244,25 +264,34 @@ def test_k1_run_copies_only_pinned_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "exclusive_lock", lease)
     monkeypatch.setattr(m, "gpu_evidence", lambda: {"nodes": {}})
 
+    invoked = False
+
     def process(argv, output, seconds):
+        nonlocal invoked
+        invoked = True
         assert seconds == 30
-        assert argv[-1] == "/work/topk-k1-compare"
+        assert argv[-1] == f"/work/{binary_name}"
         assert "--gpu-devices" in argv and "--dev-bind" in argv
-        assert (output / "work" / "topk-k1-compare").read_bytes() == payload
-        assert (output / "work" / "topk-k1-compare").stat().st_ino != binary.stat().st_ino
+        assert (output / "work" / binary_name).read_bytes() == payload
+        assert (output / "work" / binary_name).stat().st_ino != binary.stat().st_ino
         assert sorted(p.name for p in (output / "input").iterdir()) == ["preflight_exec.py"]
         return {"failure": None, "returncode": 0}
 
     monkeypatch.setattr(m, "run_process", process)
     args = argparse.Namespace(
-        action="run-k1",
+        action=f"run-{artifact}",
         output=tmp_path / "out",
         fixtures=fixtures,
         native=native,
         binary=binary,
-        binary_sha256=hashlib.sha256(payload).hexdigest(),
+        binary_sha256="0" * 64 if bad_digest else hashlib.sha256(payload).hexdigest(),
         diagnostic=False,
     )
-    assert m.main(args) == 0
+    assert m.main(args) == (1 if bad_digest else 0)
+    assert invoked is not bad_digest
     receipt = json.loads((args.output / "phase.json").read_text())
-    assert receipt["inputs"]["topk-k1-compare"]["sha256"] == hashlib.sha256(payload).hexdigest()
+    if bad_digest:
+        assert receipt["status"] == "incomplete"
+        assert receipt["failure"]["message"] == "run binary digest mismatch"
+    else:
+        assert receipt["inputs"][binary_name]["sha256"] == hashlib.sha256(payload).hexdigest()

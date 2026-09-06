@@ -47,6 +47,7 @@ ARTIFACTS = {
     "smoke": ("hip_smoke.cpp", "hip-smoke"),
     "topk": ("topk_bench.cpp", "topk-bench"),
     "k1": ("topk_k1_compare.cpp", "topk-k1-compare"),
+    "k1-variants": ("topk_k1_variants_compare.cpp", "topk-k1-variants-compare"),
 }
 
 
@@ -280,7 +281,11 @@ def command_for(action: str) -> list[str]:
         "-I/native",
         f"/input/{source}",
         "/native/reference.cpp",
-        "/native/baseline/adapter/hip_bitonic_topk.cu",
+        *(
+            []
+            if action == "compile-k1-variants"
+            else ["/native/baseline/adapter/hip_bitonic_topk.cu"]
+        ),
         "-lcrypto",
         "-o",
         f"/work/{binary}",
@@ -462,6 +467,8 @@ def parse_args() -> argparse.Namespace:
             "run-topk",
             "compile-k1",
             "run-k1",
+            "compile-k1-variants",
+            "run-k1-variants",
         ),
     )
     parser.add_argument("--output", type=Path, required=True, help="new exclusive phase directory")
@@ -521,8 +528,10 @@ def main(args: argparse.Namespace) -> int:
         names = ["preflight_exec.py"]
         if args.action.startswith("compile-"):
             names.append(artifact_for(args.action)[0])
-            if args.action == "compile-k1":
+            if args.action in ("compile-k1", "compile-k1-variants"):
                 names.append("topk_k1.hpp")
+            if args.action == "compile-k1-variants":
+                names.append("topk_k1_variants.hpp")
         for name in names:
             inputs[name] = write_bytes(
                 output / "input" / name, file_bytes(args.fixtures / name, 1024**2)
