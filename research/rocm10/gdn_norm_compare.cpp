@@ -28,8 +28,9 @@ static_assert(allocated_bytes < 256 * 1024 * 1024);
 constexpr float epsilon = 1.0e-6f;
 // FP32 unit roundoff u=2^-24: even a conservative 128-term summation has
 // gamma_128 < 7.7e-6. Positive squares, division, rsqrt and final scale add
-// rounding. rtol=2e-5 bounds that accumulated budget; atol=2e-7 handles tiny
-// outputs/underflow. Exact GPU-vs-GPU bit parity is an independent stricter gate.
+// rounding. rtol=2e-5 and atol=2e-7 are diagnostic tolerances for these
+// fixtures, not a proven bound on rsqrt error or all finite inputs. Exact
+// GPU-vs-GPU bit parity is an independent stricter gate.
 constexpr double oracle_atol = 2.0e-7, oracle_rtol = 2.0e-5;
 void check(hipError_t error, const char* operation) {
     if (error != hipSuccess) throw std::runtime_error(std::string(operation) + ": hip_error=" + std::to_string(int(error)));
