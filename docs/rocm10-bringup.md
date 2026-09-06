@@ -665,3 +665,26 @@ its approved installed baseline and fail on a mismatch. Those runs are
 correctness/runtime validation and may exercise the GPU;
 they are intentionally outside this no-GPU bring-up change. A later no-op
 comparison should be reported as `inconclusive`, not as a win.
+
+### Authorized private observation checkpoint
+
+The human authorized private quarantine and static inspection of the exact AMD
+artifact at
+`https://stable.repo.amd.com/rocm/core/tarball/therock-dist-linux-gfx1151-10.0.0.tar.gz`,
+accepting its missing cryptographic trust anchor for that scope only. The downloaded
+archive is 1,794,376,103 bytes with observed SHA-256
+`4feabd9f2da72352df37f6d714a54847d3fe913c0341fbe2a6542c1164024baf`.
+The new exclusive `prefix-2` quarantine completed with 27,627 members, including
+25,128 regular files totaling 8,883,028,033 bytes; 1,038 archive hardlinks became
+independent copies. All 305 inventory-map symlinks resolved. Inspection charged
+177,169,188 evidence bytes and peaked at 15 owned file descriptors. The original
+`prefix` remains retained and incomplete after its evidence-capacity failure.
+
+Host `readelf` statically inspected 472 ELFs (342 x86-64 and 130 AMDGPU) with zero
+failures; the recorded semantic prefix comparison before and after inspection was
+equal. Of these ELFs, 27 contained absolute RUNPATH components and three of those
+also contained empty components; this establishes no runtime dependency-resolution
+claim. Version-file contents reported ROCm `10.0.0` and HIP `7.15.26333`. Vendor
+authenticity remains unverified and metadata coverage remains unknown. This
+checkpoint grants no policy waiver: no installation, activation or SDK execution
+was authorized or performed.
