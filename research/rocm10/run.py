@@ -453,7 +453,16 @@ def run_process(argv: list[str], output: Path, wall_seconds: int) -> dict[str, A
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=("check", "compile-smoke", "run-smoke", "compile-topk", "run-topk", "compile-k1", "run-k1")
+        "action",
+        choices=(
+            "check",
+            "compile-smoke",
+            "run-smoke",
+            "compile-topk",
+            "run-topk",
+            "compile-k1",
+            "run-k1",
+        ),
     )
     parser.add_argument("--output", type=Path, required=True, help="new exclusive phase directory")
     parser.add_argument("--fixtures", type=Path, default=Path(__file__).resolve().parent)

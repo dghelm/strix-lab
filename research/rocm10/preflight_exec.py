@@ -6,12 +6,11 @@ import argparse
 import errno
 import json
 import os
-from pathlib import Path
 import re
 import resource
 import stat
 import sys
-
+from pathlib import Path
 
 NAMESPACES = ("user", "mnt", "pid", "ipc", "net")
 READ_ONLY = {"/usr", "/sdk", "/input", "/native", "/run/empty"}
@@ -34,8 +33,13 @@ def mounts() -> list[dict[str, object]]:
     for line in Path("/proc/self/mountinfo").read_text().splitlines():
         first, last = line.split(" - ", 1)
         fields = first.split()
-        result.append({"path": unescape(fields[4]), "flags": fields[5].split(","),
-                       "filesystem": last.split()[0]})
+        result.append(
+            {
+                "path": unescape(fields[4]),
+                "flags": fields[5].split(","),
+                "filesystem": last.split()[0],
+            }
+        )
     return result
 
 
@@ -57,7 +61,11 @@ def nested_userns_disabled() -> bool:
 def check(args: argparse.Namespace) -> dict[str, object]:
     require(os.getuid() == os.geteuid() == 1000, "unexpected uid")
     require(os.getgid() == os.getegid() == 1000, "unexpected gid")
-    status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    status = dict(
+        line.split(":", 1)
+        for line in Path("/proc/self/status").read_text().splitlines()
+        if ":" in line
+    )
     for key in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
         require(int(status[key].strip(), 16) == 0, f"nonzero {key}")
     require(status["NoNewPrivs"].strip() == "1", "NoNewPrivs missing")
@@ -67,7 +75,9 @@ def check(args: argparse.Namespace) -> dict[str, object]:
         require(name in host_ns and host_ns[name] != current_ns[name], f"shared {name} namespace")
     require(nested_userns_disabled(), "nested user namespaces not disabled")
     require(os.getcwd() == "/run/empty" and not os.listdir("."), "CWD must be empty /run/empty")
-    require(set(os.environ) <= {"PATH", "LC_ALL", "TMPDIR", "PWD"}, "unexpected preflight environment")
+    require(
+        set(os.environ) <= {"PATH", "LC_ALL", "TMPDIR", "PWD"}, "unexpected preflight environment"
+    )
     require(os.environ.get("PWD") == "/run/empty", "unexpected preflight PWD")
     require(os.environ.get("PATH") == "/usr/bin:/bin", "preflight PATH is not host-only")
     for path in ("/home", "/opt", "/__w", "/run/user", "/run/dbus", "/etc/ld.so.preload"):
@@ -94,22 +104,42 @@ def check(args: argparse.Namespace) -> dict[str, object]:
     require(READ_ONLY | {"/proc", "/dev", "/tmp", "/work"} <= seen, "missing required mounts")
     devices = {}
     if args.phase == "gpu":
-        require(SYSFS | GPU_DEVICES <= seen, "missing GPU mounts")
+        require(seen >= SYSFS | GPU_DEVICES, "missing GPU mounts")
         expected_devices = json.loads(args.gpu_devices)
         require(set(expected_devices) == GPU_DEVICES, "GPU identity set mismatch")
         for path in GPU_DEVICES:
             value = os.stat(path)
             actual = [os.major(value.st_rdev), os.minor(value.st_rdev)]
-            require(stat.S_ISCHR(value.st_mode) and actual == expected_devices[path], f"GPU node mismatch: {path}")
+            require(
+                stat.S_ISCHR(value.st_mode) and actual == expected_devices[path],
+                f"GPU node mismatch: {path}",
+            )
             devices[path] = actual
-        require(os.path.realpath("/sys/class/drm/renderD128/device").endswith("/0000:c2:00.0"), "GPU PCI mapping mismatch")
-        require(os.path.samefile("/sys/dev/char/226:128", "/sys/class/drm/renderD128"), "render sysfs alias mismatch")
-        require(Path("/sys/dev/char/226:128/device/drm").is_dir(), "missing libdrm classification path")
+        require(
+            os.path.realpath("/sys/class/drm/renderD128/device").endswith("/0000:c2:00.0"),
+            "GPU PCI mapping mismatch",
+        )
+        require(
+            os.path.samefile("/sys/dev/char/226:128", "/sys/class/drm/renderD128"),
+            "render sysfs alias mismatch",
+        )
+        require(
+            Path("/sys/dev/char/226:128/device/drm").is_dir(), "missing libdrm classification path"
+        )
         properties = Path("/sys/class/kfd/kfd/topology/nodes/1/properties").read_text()
         values = dict(line.split(maxsplit=1) for line in properties.splitlines() if " " in line)
-        require(values.get("drm_render_minor") == "128" and values.get("gfx_target_version") == "110501", "KFD target mismatch")
+        require(
+            values.get("drm_render_minor") == "128"
+            and values.get("gfx_target_version") == "110501",
+            "KFD target mismatch",
+        )
     else:
-        require(not os.path.lexists("/dev/kfd") and not os.path.lexists("/dev/dri") and not os.path.lexists("/sys"), "GPU-free phase exposes GPU/sysfs")
+        require(
+            not os.path.lexists("/dev/kfd")
+            and not os.path.lexists("/dev/dri")
+            and not os.path.lexists("/sys"),
+            "GPU-free phase exposes GPU/sysfs",
+        )
     require(os.readlink("/proc/self/fd/0") == "/dev/null", "stdin is not /dev/null")
     for fd in (1, 2):
         require(stat.S_ISFIFO(os.fstat(fd).st_mode), "output must use captured pipes")
@@ -123,11 +153,19 @@ def check(args: argparse.Namespace) -> dict[str, object]:
                     continue
                 raise
             raise RuntimeError(f"unexpected inherited descriptor {item}")
-    return {"event": "preflight_pass", "phase": args.phase, "uid": os.getuid(),
-            "gid": os.getgid(), "namespaces": current_ns, "mounts": records,
-            "sdk_identity": list(expected_identity), "gpu_devices": devices,
-            "metadata_coverage": "unknown", "vendor_authenticity": "unverified",
-            "seccomp": status["Seccomp"].strip()}
+    return {
+        "event": "preflight_pass",
+        "phase": args.phase,
+        "uid": os.getuid(),
+        "gid": os.getgid(),
+        "namespaces": current_ns,
+        "mounts": records,
+        "sdk_identity": list(expected_identity),
+        "gpu_devices": devices,
+        "metadata_coverage": "unknown",
+        "vendor_authenticity": "unverified",
+        "seccomp": status["Seccomp"].strip(),
+    }
 
 
 def main() -> None:
@@ -151,9 +189,14 @@ def main() -> None:
         resource.setrlimit(resource.RLIMIT_AS, (16 * 1024**3, 16 * 1024**3))
     environment = {"PATH": "/usr/bin:/bin", "LC_ALL": "C", "TMPDIR": "/tmp"}
     if args.phase != "check":
-        environment.update(PATH="/sdk/bin:/sdk/lib/llvm/bin:/usr/bin:/bin", HIP_PLATFORM="amd",
-                           HIP_PATH="/sdk", ROCM_PATH="/sdk", HIP_CLANG_PATH="/sdk/lib/llvm/bin",
-                           LD_LIBRARY_PATH="/sdk/lib:/sdk/lib/llvm/lib:/sdk/lib/rocm_sysdeps/lib")
+        environment.update(
+            PATH="/sdk/bin:/sdk/lib/llvm/bin:/usr/bin:/bin",
+            HIP_PLATFORM="amd",
+            HIP_PATH="/sdk",
+            ROCM_PATH="/sdk",
+            HIP_CLANG_PATH="/sdk/lib/llvm/bin",
+            LD_LIBRARY_PATH="/sdk/lib:/sdk/lib/llvm/lib:/sdk/lib/rocm_sysdeps/lib",
+        )
         if args.diagnostic:
             environment["LD_DEBUG"] = "libs,files"
     os.execve(command[0], command, environment)
@@ -163,5 +206,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(json.dumps({"event": "preflight_fail", "error": str(exc)}), file=sys.stderr, flush=True)
+        print(
+            json.dumps({"event": "preflight_fail", "error": str(exc)}), file=sys.stderr, flush=True
+        )
         sys.exit(125)
